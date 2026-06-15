@@ -1,0 +1,100 @@
+# Regime-Aware Replay Research
+
+This repo supports the first two-week validation in `ProjectPlan`: before adding
+larger RL machinery, test whether standard replay mixes incompatible market
+regimes and whether lightweight regime-aware sampling can reduce that mismatch.
+
+The current scope is intentionally small: produce at most three market-regime
+labeling methods that can tag replay-buffer transitions.
+
+## Repo Layout
+
+- `ProjectPlan/`: meeting brief and proposal documents.
+- `data/`: existing market index and DOW30 feature CSVs.
+- `src/regime_labeling/`: reusable Python package for regime labels.
+- `scripts/make_regime_labels.py`: local CLI wrapper.
+- `docs/regime_labeling_notes.md`: method notes and literature anchors.
+- `tests/`: smoke tests for labeler behavior.
+- `outputs/`: generated labels and summaries, ignored by git.
+
+## Label Methods
+
+1. `rule_based`: transparent rolling trend/volatility labels. This is the fast
+   baseline from the project plan: bull/risk-on, sideways, high-vol, risk-off.
+2. `hmm`: diagonal Gaussian HMM over market-level return, trend, volatility, and
+   VIX features. This is the classical latent-regime baseline.
+3. `recap_cusum`: ReCAP-inspired adaptive regime detection. It uses CUSUM-style
+   change detection over market features, produces variable-length `segment_id`,
+   then maps each segment into the shared replay-friendly regime taxonomy.
+
+## Quick Start
+
+The local `nnenv2` environment has the needed dependencies:
+
+```bash
+/Users/littleotter/miniconda3/envs/nnenv2/bin/python scripts/make_regime_labels.py --method all
+```
+
+Expected outputs:
+
+- `outputs/regime_labels/rule_based_labels.csv`
+- `outputs/regime_labels/hmm_labels.csv`
+- `outputs/regime_labels/recap_cusum_labels.csv`
+- `outputs/regime_labels/all_regime_labels.csv`
+- `outputs/regime_labels/label_summary.csv`
+- `outputs/regime_labels/label_switches.csv`
+
+To run tests:
+
+```bash
+/Users/littleotter/miniconda3/envs/nnenv2/bin/python -m unittest discover -s tests
+```
+
+For a fresh environment:
+
+```bash
+python -m venv .venv
+. .venv/bin/activate
+pip install -e .
+make-regime-labels --method all
+```
+
+## Default Data
+
+The CLI defaults to:
+
+```text
+data/market_indices_20080601_20260531/market_regime_features_wide.csv
+```
+
+This file already contains daily SPY/DIA/QQQ/index return, volatility, trend,
+and VIX features. The feature builder also accepts long panel files such as
+`data/dow30_20080601_20260531/DOW30_recap_features.csv` by collapsing them to
+one market-level row per date.
+
+## How This Feeds Section 7/8
+
+The labels are meant to be joined to transitions by date:
+
+```text
+transition.date -> regime_label
+```
+
+Replay diagnostics can then track:
+
+- sampled regime distribution
+- current-regime vs sampled-transition mismatch rate
+- TD-error by regime
+- reward recovery time after regime switches
+- drawdown and turnover around switches
+
+## Literature Anchors
+
+- ReCAP: Regime-Adaptive Continual Learning for Portfolio Management,
+  Pan et al. (2026), https://arxiv.org/abs/2606.00143.
+- Hamilton (1989), Markov-switching models for non-stationary time series,
+  https://www.jstor.org/stable/1912559.
+- Ang and Timmermann (2012), regime changes in financial markets,
+  https://doi.org/10.1146/annurev-financial-102710-144808.
+- Page (1954), CUSUM change detection,
+  https://en.wikipedia.org/wiki/CUSUM.
