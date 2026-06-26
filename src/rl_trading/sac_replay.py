@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+import itertools
 import json
 import math
 import os
@@ -13,43 +14,62 @@ import pandas as pd
 import torch
 from torch import nn
 import torch.nn.functional as F
+from torch.distributions import Normal
 
 from src.regime_labeling.features import MarketFeatureConfig, build_market_features
+from src.rl_trading.dqn_replay import (
+    build_asset_returns,
+    find_col,
+    robust_positive_scale,
+    sigmoid_np,
+)
+
+
+LOG_STD_MIN = -20.0
+LOG_STD_MAX = 2.0
 
 
 @dataclass
-class ExperimentConfig:
+class SACExperimentConfig:
     market_csv: str = "data/market_indices_20080601_20260531/market_regime_features_wide.csv"
     labels_csv: str = "outputs/regime_labels/all_regime_labels.csv"
-    output_root: str = "outputs/dqn_replay"
+    output_root: str = "outputs/sac_replay"
+    run_name: str = ""
 
     label_method: str = "rule_based"
     tradable_symbols: tuple[str, ...] = ("DIA", "SPY", "QQQ")
     primary_symbol: str = "SPY"
 
     transaction_cost_bps: float = 10.0
+    action_temperature: float = 1.0
 
     # Methods:
-    # online  = DQN-only / no replay
-    # uniform = DQN + Uniform Replay
-    # per     = DQN + Prioritized Experience Replay
-    # regime  = DQN + Regime-aware Replay mixture
-    # deer    = DQN + DEER-style TD-error / Q-discrepancy priority
+    # uniform = SAC + Uniform Replay
+    # per     = SAC + Prioritized Experience Replay
+    # regime  = SAC + Regime-aware Replay mixture
+    # deer    = SAC + DEER-style TD-error / Q-discrepancy priority
     replay: str = "uniform"
     seed: int = 0
 
     buffer_size: int = 50000
-    batch_size: int = 64
-    warmup_steps: int = 256
+    batch_size: int = 128
+    warmup_steps: int = 512
+    start_steps: int = 512
+    max_steps: int = 0
+    updates_per_step: int = 1
 
     gamma: float = 0.99
-    lr: float = 1e-3
-    hidden_dim: int = 128
-    target_update_freq: int = 500
+    tau: float = 0.005
+    actor_lr: float = 3e-4
+    critic_lr: float = 3e-4
+    alpha_lr: float = 3e-4
+    hidden_dim: int = 256
+    grad_clip_norm: float = 10.0
+    target_update_interval: int = 1
 
-    epsilon_start: float = 1.0
-    epsilon_end: float = 0.05
-    epsilon_decay_steps: int = 8000
+    auto_entropy_tuning: bool = True
+    init_alpha: float = 0.2
+    target_entropy_scale: float = 1.0
 
     # PER parameters
     per_alpha: float = 0.6
@@ -64,9 +84,7 @@ class ExperimentConfig:
     regime_random_ratio: float = 0.10
     regime_recent_window: int = 252
 
-    # DEER-style replay parameters. The MVP uses external regime labels as change points.
-    # At a boundary, the agent freezes a Q snapshot. Priority then combines TD-error
-    # and empirical Q-discrepancy: |Q_probe(s,a) - Q_reference(s,a)|.
+    # DEER-style replay parameters. External regime labels define change points.
     deer_s0: float = 0.8
     deer_half_life: int = 5
     deer_s_floor: float = 0.05
@@ -86,104 +104,39 @@ def set_seed(seed: int) -> None:
     torch.manual_seed(seed)
 
 
-def find_col(df: pd.DataFrame, candidates: list[str]) -> str | None:
-    lower = {c.lower(): c for c in df.columns}
-    for c in candidates:
-        if c.lower() in lower:
-            return lower[c.lower()]
-    return None
+def soft_update(target: nn.Module, source: nn.Module, tau: float) -> None:
+    with torch.no_grad():
+        for target_param, source_param in zip(target.parameters(), source.parameters()):
+            target_param.data.mul_(1.0 - tau).add_(source_param.data, alpha=tau)
 
 
-def to_numeric_clean(s: pd.Series) -> pd.Series:
-    return (
-        pd.to_numeric(s, errors="coerce")
-        .replace([np.inf, -np.inf], np.nan)
-        .ffill()
-        .bfill()
-        .fillna(0.0)
-    )
+def hard_update(target: nn.Module, source: nn.Module) -> None:
+    target.load_state_dict(source.state_dict())
 
 
-def build_asset_returns(raw: pd.DataFrame, symbols: tuple[str, ...]) -> pd.DataFrame:
-    raw = raw.copy()
-    raw["date"] = pd.to_datetime(raw["date"])
-
-    id_col = find_col(raw, ["symbol", "tic", "ticker"])
-
-    # Long panel format: date, tic/symbol, close/adjclose
-    if id_col is not None and raw["date"].duplicated().any():
-        price_col = find_col(raw, ["adjclose", "adjcp", "close"])
-        if price_col is None:
-            raise ValueError("Long panel data requires one price column among adjclose, adjcp, close.")
-
-        panel = raw[["date", id_col, price_col]].copy()
-        panel[id_col] = panel[id_col].astype(str).str.upper()
-        px = panel.pivot_table(index="date", columns=id_col, values=price_col, aggfunc="last").sort_index()
-        rets = px.pct_change().replace([np.inf, -np.inf], np.nan).fillna(0.0)
-
-        out = pd.DataFrame({"date": rets.index})
-        for s in symbols:
-            su = s.upper()
-            if su in rets.columns:
-                out[f"ret_{su}"] = rets[su].to_numpy()
-        return out.reset_index(drop=True)
-
-    # Wide format
-    out = pd.DataFrame({"date": raw["date"]})
-
-    for s in symbols:
-        su = s.upper()
-
-        ret_col = find_col(
-            raw,
-            [
-                f"ret_{su}",
-                f"{su}_ret",
-                f"ret_1d_{su}",
-                f"{su}_ret_1d",
-                f"return_1_{su}",
-                f"{su}_return_1",
-                f"return_1d_{su}",
-                f"{su}_return_1d",
-                f"close_return_{su}",
-                f"adjcp_return_{su}",
-                f"pct_change_{su}",
-                f"{su}_pct_change",
-            ],
-        )
-
-        if ret_col is not None:
-            out[f"ret_{su}"] = to_numeric_clean(raw[ret_col]).to_numpy()
-            continue
-
-        price_col = find_col(
-            raw,
-            [
-                f"adjclose_{su}",
-                f"{su}_adjclose",
-                f"adjcp_{su}",
-                f"{su}_adjcp",
-                f"close_{su}",
-                f"{su}_close",
-                f"price_{su}",
-                f"{su}_price",
-            ],
-        )
-
-        if price_col is not None:
-            px = to_numeric_clean(raw[price_col])
-            out[f"ret_{su}"] = px.pct_change().replace([np.inf, -np.inf], np.nan).fillna(0.0).to_numpy()
-
-    return out.fillna(0.0)
+def deer_score_from_new_count(n_new: int, cfg: SACExperimentConfig) -> float:
+    if n_new <= 0:
+        return 0.0
+    age_new = max(int(n_new) - 1, 0)
+    score = float(cfg.deer_s0) * (2.0 ** (-age_new / max(1, int(cfg.deer_half_life))))
+    if score < float(cfg.deer_s_floor):
+        return 0.0
+    return score
 
 
-class MarketDQNEnv:
-    def __init__(self, cfg: ExperimentConfig):
+class MarketSACEnv:
+    """Continuous-action long-only portfolio environment.
+
+    The SAC actor outputs bounded continuous logits. The environment converts
+    those logits to portfolio weights over cash plus tradable assets with a
+    softmax transform. Cash has zero return; asset weights earn next-day returns.
+    """
+
+    def __init__(self, cfg: SACExperimentConfig):
         self.cfg = cfg
 
         market_path = Path(cfg.market_csv)
         label_path = Path(cfg.labels_csv)
-
         if not market_path.exists():
             raise FileNotFoundError(f"market_csv not found: {market_path}")
         if not label_path.exists():
@@ -214,7 +167,6 @@ class MarketDQNEnv:
                 raise ValueError("labels file must contain regime_label, label, regime, or state.")
             labels["regime_label"] = labels[possible]
 
-        # Ensure regime_label is integer-coded
         num_label = pd.to_numeric(labels["regime_label"], errors="coerce")
         if num_label.isna().any():
             labels["regime_label"] = pd.Categorical(labels["regime_label"].astype(str)).codes
@@ -245,7 +197,6 @@ class MarketDQNEnv:
             )
 
         self.df = df
-
         self.feature_cols = [
             c for c in ["ret_short", "ret_long", "vol", "trend", "vix", "turbulence"] if c in df.columns
         ]
@@ -256,37 +207,17 @@ class MarketDQNEnv:
         self.feature_mean = feature_df.mean()
         self.feature_std = feature_df.std().replace(0.0, 1.0).fillna(1.0)
 
-        self.actions, self.action_names = self._make_actions()
-        self.n_actions = len(self.actions)
-        self.state_dim = len(self.feature_cols) + self.n_actions
-
+        self.weight_names = ["cash", *self.symbols]
+        self.action_dim = len(self.weight_names)
+        self.state_dim = len(self.feature_cols) + self.action_dim
         self.cost_rate = cfg.transaction_cost_bps / 10000.0
+        self.action_temperature = max(float(cfg.action_temperature), 1e-6)
         self.reset()
-
-    def _make_actions(self) -> tuple[list[np.ndarray], list[str]]:
-        n = len(self.symbols)
-        actions: list[np.ndarray] = []
-        names: list[str] = []
-
-        actions.append(np.zeros(n, dtype=np.float32))
-        names.append("cash")
-
-        for i, s in enumerate(self.symbols):
-            w = np.zeros(n, dtype=np.float32)
-            w[i] = 1.0
-            actions.append(w)
-            names.append(s)
-
-        if n >= 2:
-            actions.append(np.ones(n, dtype=np.float32) / n)
-            names.append("equal_weight")
-
-        return actions, names
 
     def reset(self) -> np.ndarray:
         self.t = 0
-        self.prev_action = 0
-        self.prev_weights = self.actions[0].copy()
+        self.prev_weights = np.zeros(self.action_dim, dtype=np.float32)
+        self.prev_weights[0] = 1.0
         self.portfolio_value = 1.0
         self.peak_value = 1.0
         return self._state()
@@ -296,24 +227,31 @@ class MarketDQNEnv:
         raw_feats = pd.to_numeric(row[self.feature_cols], errors="coerce")
         feats = ((raw_feats - self.feature_mean) / self.feature_std)
         feats = feats.replace([np.inf, -np.inf], np.nan).fillna(0.0).to_numpy(dtype=np.float32)
+        return np.concatenate([feats, self.prev_weights]).astype(np.float32)
 
-        action_onehot = np.zeros(self.n_actions, dtype=np.float32)
-        action_onehot[self.prev_action] = 1.0
+    def action_to_weights(self, action: np.ndarray) -> np.ndarray:
+        logits = np.asarray(action, dtype=np.float32).reshape(-1)
+        if logits.shape[0] != self.action_dim:
+            raise ValueError(f"Expected action_dim={self.action_dim}, got shape {logits.shape}.")
+        logits = np.clip(logits / self.action_temperature, -20.0, 20.0)
+        logits = logits - np.max(logits)
+        exp_logits = np.exp(logits)
+        weights = exp_logits / max(float(exp_logits.sum()), 1e-12)
+        return weights.astype(np.float32)
 
-        return np.concatenate([feats, action_onehot]).astype(np.float32)
-
-    def step(self, action: int) -> tuple[np.ndarray, float, bool, dict[str, Any]]:
-        action = int(action)
+    def step(self, action: np.ndarray) -> tuple[np.ndarray, float, bool, dict[str, Any]]:
+        raw_action = np.asarray(action, dtype=np.float32).reshape(self.action_dim)
         current = self.df.iloc[self.t]
         next_t = self.t + 1
         done = next_t >= len(self.df) - 1
 
         next_row = self.df.iloc[next_t]
-        new_weights = self.actions[action]
+        new_weights = self.action_to_weights(raw_action)
+        asset_weights = new_weights[1:]
         turnover = float(np.abs(new_weights - self.prev_weights).sum())
 
         asset_returns = np.array([float(next_row[f"ret_{s}"]) for s in self.symbols], dtype=np.float32)
-        gross_return = float(np.dot(new_weights, asset_returns))
+        gross_return = float(np.dot(asset_weights, asset_returns))
         cost = self.cost_rate * turnover
         reward = math.log(max(1e-12, 1.0 + gross_return)) - cost
 
@@ -321,24 +259,26 @@ class MarketDQNEnv:
         self.peak_value = max(self.peak_value, self.portfolio_value)
         drawdown = 1.0 - self.portfolio_value / max(self.peak_value, 1e-12)
 
-        info = {
+        info: dict[str, Any] = {
             "date": str(current["date"].date()),
             "time_index": int(self.t),
             "regime_label": int(current["regime_label"]),
             "regime_name": str(current["regime_name"]),
-            "action": action,
-            "action_name": self.action_names[action],
             "portfolio_value": float(self.portfolio_value),
             "drawdown": float(drawdown),
             "turnover": float(turnover),
             "gross_return": float(gross_return),
             "cost": float(cost),
+            "action": raw_action.copy(),
+            "action_weights": new_weights.copy(),
         }
+        for name, weight in zip(self.weight_names, new_weights):
+            info[f"weight_{name}"] = float(weight)
+        for name, value in zip(self.weight_names, raw_action):
+            info[f"raw_action_{name}"] = float(value)
 
         self.t = next_t
-        self.prev_action = action
         self.prev_weights = new_weights.copy()
-
         return self._state(), float(reward), done, info
 
     def current_regime(self) -> int:
@@ -348,7 +288,7 @@ class MarketDQNEnv:
         return str(self.df.iloc[self.t]["date"].date())
 
 
-class ReplayBuffer:
+class ContinuousReplayBuffer:
     def __init__(self, capacity: int, seed: int):
         self.capacity = int(capacity)
         self.rng = np.random.default_rng(seed)
@@ -384,7 +324,8 @@ class ReplayBuffer:
         batch = [self.storage[int(i)] for i in idx]
         return {
             "states": np.stack([b["state"] for b in batch]).astype(np.float32),
-            "actions": np.array([b["action"] for b in batch], dtype=np.int64),
+            "actions": np.stack([b["action"] for b in batch]).astype(np.float32),
+            "action_weights": np.stack([b["action_weights"] for b in batch]).astype(np.float32),
             "rewards": np.array([b["reward"] for b in batch], dtype=np.float32),
             "next_states": np.stack([b["next_state"] for b in batch]).astype(np.float32),
             "dones": np.array([b["done"] for b in batch], dtype=np.float32),
@@ -400,7 +341,7 @@ class ReplayBuffer:
         }
 
 
-class PERBuffer(ReplayBuffer):
+class ContinuousPERBuffer(ContinuousReplayBuffer):
     def __init__(self, capacity: int, seed: int, alpha: float = 0.6, eps: float = 1e-6):
         super().__init__(capacity, seed)
         self.alpha = float(alpha)
@@ -442,7 +383,7 @@ class PERBuffer(ReplayBuffer):
         self.max_priority = max(self.max_priority, float(new_p.max()))
 
 
-class RegimeAwareReplayBuffer(PERBuffer):
+class ContinuousRegimeAwareReplayBuffer(ContinuousPERBuffer):
     def __init__(
         self,
         capacity: int,
@@ -459,7 +400,6 @@ class RegimeAwareReplayBuffer(PERBuffer):
         total = same_ratio + high_td_ratio + recent_ratio + random_ratio
         if total <= 0:
             raise ValueError("Regime-aware ratios must sum to a positive value.")
-
         self.same_ratio = same_ratio / total
         self.high_td_ratio = high_td_ratio / total
         self.recent_ratio = recent_ratio / total
@@ -480,11 +420,9 @@ class RegimeAwareReplayBuffer(PERBuffer):
             probs = None
 
         replace = len(candidates) < k
-
         if probs is not None:
             probs = np.asarray(probs, dtype=np.float64)
             probs = probs / probs.sum()
-
         return self.rng.choice(candidates, size=k, replace=replace, p=probs).astype(np.int64)
 
     def sample(
@@ -519,19 +457,18 @@ class RegimeAwareReplayBuffer(PERBuffer):
         n_random = batch_size - n_same - n_high - n_recent
 
         idx_same = self._choice(same_candidates, n_same)
-        src_same = ["same_regime"] * len(idx_same)
-
         idx_high = self._choice(all_idx, n_high, probs=priority_probs)
-        src_high = ["high_td"] * len(idx_high)
-
         idx_recent = self._choice(recent_candidates, n_recent)
-        src_recent = ["recent"] * len(idx_recent)
-
         idx_random = self._choice(all_idx, n_random)
-        src_random = ["random"] * len(idx_random)
 
         idx = np.concatenate([idx_same, idx_high, idx_recent, idx_random]).astype(np.int64)
-        sources = np.array(src_same + src_high + src_recent + src_random, dtype=object)
+        sources = np.array(
+            ["same_regime"] * len(idx_same)
+            + ["high_td"] * len(idx_high)
+            + ["recent"] * len(idx_recent)
+            + ["random"] * len(idx_random),
+            dtype=object,
+        )
 
         if len(idx) < batch_size:
             extra = self._choice(all_idx, batch_size - len(idx))
@@ -542,73 +479,20 @@ class RegimeAwareReplayBuffer(PERBuffer):
             idx = idx[:batch_size]
             sources = sources[:batch_size]
 
-        # For regime-aware replay, use simple weights = 1.
-        # The purpose is diagnostics and regime-controlled sampling, not exact IS correction.
         weights = np.ones(len(idx), dtype=np.float32)
-
         batch = self._pack(idx, weights)
         batch["priorities"] = priorities[idx].astype(np.float32)
         batch["sample_probs"] = priority_probs[idx].astype(np.float32)
-
         batch["sample_sources"] = sources
         return batch
 
 
-def sigmoid_np(x: np.ndarray | float) -> np.ndarray:
-    x_arr = np.asarray(x, dtype=np.float32)
-    return 1.0 / (1.0 + np.exp(-x_arr))
-
-
-def robust_positive_scale(
-    values: np.ndarray,
-    previous: float | None,
-    rho: float,
-    eps: float,
-    floor: float,
-) -> float | None:
-    """Scale-only robust normalization for non-negative diagnostics."""
-    v = np.asarray(values, dtype=np.float64)
-    v = v[np.isfinite(v)]
-    if len(v) == 0:
-        return previous
-
-    med = float(np.median(v))
-    mad = float(np.median(np.abs(v - med)))
-    candidate = med + 1.4826 * mad + eps
-    if not np.isfinite(candidate) or candidate <= floor:
-        return previous
-
-    if previous is None:
-        return float(candidate)
-    return float(rho * previous + (1.0 - rho) * candidate)
-
-
-def deer_score_from_new_count(n_new: int, cfg: ExperimentConfig) -> float:
-    """External-label MVP schedule. First new transition after a boundary uses full S0."""
-    if n_new <= 0:
-        return 0.0
-    age_new = max(int(n_new) - 1, 0)
-    score = float(cfg.deer_s0) * (2.0 ** (-age_new / max(1, int(cfg.deer_half_life))))
-    if score < float(cfg.deer_s_floor):
-        return 0.0
-    return score
-
-
-class DEERReplayBuffer(PERBuffer):
-    """DEER-style replay for the finance DQN MVP.
-
-    This class keeps the PER sampling interface but changes priority updates.
-    External regime labels define boundaries. After a boundary, transitions from the
-    current boundary are treated as post-change; older transitions are treated as
-    pre-change. Priority uses robust-normalized TD-error and empirical Q discrepancy.
-    """
-
-    def __init__(self, capacity: int, seed: int, cfg: ExperimentConfig):
+class ContinuousDEERReplayBuffer(ContinuousPERBuffer):
+    def __init__(self, capacity: int, seed: int, cfg: SACExperimentConfig):
         super().__init__(capacity=capacity, seed=seed, alpha=cfg.per_alpha, eps=cfg.per_eps)
         self.cfg = cfg
         self.scale_td: float | None = None
         self.scale_doe: float | None = None
-        self.last_scale_refresh_update = -1
 
     def sample(
         self,
@@ -647,11 +531,10 @@ class DEERReplayBuffer(PERBuffer):
         if n_post > 0:
             post_probs = global_probs[post_candidates].astype(np.float64)
             post_probs = post_probs / post_probs.sum()
-            replace_post = len(post_candidates) < n_post
             idx_post = self.rng.choice(
                 post_candidates,
                 size=n_post,
-                replace=replace_post,
+                replace=len(post_candidates) < n_post,
                 p=post_probs,
             ).astype(np.int64)
             idx_parts.append(idx_post)
@@ -666,11 +549,10 @@ class DEERReplayBuffer(PERBuffer):
                 remaining = all_idx
             rest_probs = global_probs[remaining].astype(np.float64)
             rest_probs = rest_probs / rest_probs.sum()
-            replace_rest = len(remaining) < n_rest
             idx_rest = self.rng.choice(
                 remaining,
                 size=n_rest,
-                replace=replace_rest,
+                replace=len(remaining) < n_rest,
                 p=rest_probs,
             ).astype(np.int64)
             idx_parts.append(idx_rest)
@@ -742,7 +624,6 @@ class DEERReplayBuffer(PERBuffer):
             dtype=bool,
         )
 
-        # Before the first detected boundary, DEER should behave like PER.
         if int(current_boundary) <= 0 or self.scale_doe is None:
             new_p = td_abs + cfg.per_eps
             source_mode = np.array(["deer_per_fallback"] * len(idx), dtype=object)
@@ -782,143 +663,220 @@ class DEERReplayBuffer(PERBuffer):
         }
 
 
-class QNetwork(nn.Module):
-    def __init__(self, state_dim: int, n_actions: int, hidden_dim: int):
+class ActorNetwork(nn.Module):
+    def __init__(self, state_dim: int, action_dim: int, hidden_dim: int):
         super().__init__()
-        self.net = nn.Sequential(
+        self.backbone = nn.Sequential(
             nn.Linear(state_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, n_actions),
+        )
+        self.mean = nn.Linear(hidden_dim, action_dim)
+        self.log_std = nn.Linear(hidden_dim, action_dim)
+
+    def forward(self, state: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        x = self.backbone(state)
+        mean = self.mean(x)
+        log_std = torch.clamp(self.log_std(x), LOG_STD_MIN, LOG_STD_MAX)
+        return mean, log_std
+
+    def sample(self, state: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        mean, log_std = self.forward(state)
+        std = log_std.exp()
+        normal = Normal(mean, std)
+        raw = normal.rsample()
+        action = torch.tanh(raw)
+        log_prob = normal.log_prob(raw) - torch.log(1.0 - action.pow(2) + 1e-6)
+        log_prob = log_prob.sum(dim=-1, keepdim=True)
+        return action, log_prob
+
+    def deterministic(self, state: torch.Tensor) -> torch.Tensor:
+        mean, _ = self.forward(state)
+        return torch.tanh(mean)
+
+
+class CriticNetwork(nn.Module):
+    def __init__(self, state_dim: int, action_dim: int, hidden_dim: int):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(state_dim + action_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1),
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x)
+    def forward(self, state: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
+        return self.net(torch.cat([state, action], dim=-1))
 
 
-class DQNAgent:
-    def __init__(self, state_dim: int, n_actions: int, cfg: ExperimentConfig):
+class SACAgent:
+    def __init__(self, state_dim: int, action_dim: int, cfg: SACExperimentConfig):
         self.cfg = cfg
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.action_dim = int(action_dim)
 
-        self.q = QNetwork(state_dim, n_actions, cfg.hidden_dim).to(self.device)
-        self.target = QNetwork(state_dim, n_actions, cfg.hidden_dim).to(self.device)
-        self.target.load_state_dict(self.q.state_dict())
+        self.actor = ActorNetwork(state_dim, action_dim, cfg.hidden_dim).to(self.device)
+        self.q1 = CriticNetwork(state_dim, action_dim, cfg.hidden_dim).to(self.device)
+        self.q2 = CriticNetwork(state_dim, action_dim, cfg.hidden_dim).to(self.device)
+        self.target_q1 = CriticNetwork(state_dim, action_dim, cfg.hidden_dim).to(self.device)
+        self.target_q2 = CriticNetwork(state_dim, action_dim, cfg.hidden_dim).to(self.device)
+        hard_update(self.target_q1, self.q1)
+        hard_update(self.target_q2, self.q2)
 
-        # q_probe is an EMA critic used for a less noisy empirical Q-discrepancy.
-        # q_reference is frozen at each externally detected regime boundary.
-        self.q_probe = QNetwork(state_dim, n_actions, cfg.hidden_dim).to(self.device)
-        self.q_probe.load_state_dict(self.q.state_dict())
-        self.q_reference = QNetwork(state_dim, n_actions, cfg.hidden_dim).to(self.device)
-        self.q_reference.load_state_dict(self.q_probe.state_dict())
-        for p in self.q_probe.parameters():
-            p.requires_grad_(False)
-        for p in self.q_reference.parameters():
-            p.requires_grad_(False)
+        self.q1_probe = CriticNetwork(state_dim, action_dim, cfg.hidden_dim).to(self.device)
+        self.q2_probe = CriticNetwork(state_dim, action_dim, cfg.hidden_dim).to(self.device)
+        hard_update(self.q1_probe, self.q1)
+        hard_update(self.q2_probe, self.q2)
+        self.q1_reference = CriticNetwork(state_dim, action_dim, cfg.hidden_dim).to(self.device)
+        self.q2_reference = CriticNetwork(state_dim, action_dim, cfg.hidden_dim).to(self.device)
+        hard_update(self.q1_reference, self.q1_probe)
+        hard_update(self.q2_reference, self.q2_probe)
+        for module in (self.q1_probe, self.q2_probe, self.q1_reference, self.q2_reference):
+            for p in module.parameters():
+                p.requires_grad_(False)
 
-        self.opt = torch.optim.Adam(self.q.parameters(), lr=cfg.lr)
+        self.actor_opt = torch.optim.Adam(self.actor.parameters(), lr=cfg.actor_lr)
+        self.q1_opt = torch.optim.Adam(self.q1.parameters(), lr=cfg.critic_lr)
+        self.q2_opt = torch.optim.Adam(self.q2.parameters(), lr=cfg.critic_lr)
+
+        self.target_entropy = -float(action_dim) * float(cfg.target_entropy_scale)
+        init_alpha = max(float(cfg.init_alpha), 1e-8)
+        self.log_alpha = torch.tensor(math.log(init_alpha), dtype=torch.float32, device=self.device)
+        self.log_alpha.requires_grad_(cfg.auto_entropy_tuning)
+        self.alpha_opt = torch.optim.Adam([self.log_alpha], lr=cfg.alpha_lr)
         self.update_count = 0
-        self.n_actions = n_actions
+
+    @property
+    def alpha(self) -> torch.Tensor:
+        return self.log_alpha.exp()
 
     def freeze_reference(self) -> None:
-        self.q_reference.load_state_dict(self.q_probe.state_dict())
+        hard_update(self.q1_reference, self.q1_probe)
+        hard_update(self.q2_reference, self.q2_probe)
 
     def _ema_update_probe(self) -> None:
         tau = float(self.cfg.deer_probe_tau)
+        soft_update(self.q1_probe, self.q1, tau)
+        soft_update(self.q2_probe, self.q2, tau)
+
+    def act(self, state: np.ndarray, deterministic: bool = False) -> np.ndarray:
         with torch.no_grad():
-            for probe_param, q_param in zip(self.q_probe.parameters(), self.q.parameters()):
-                probe_param.data.mul_(1.0 - tau).add_(q_param.data, alpha=tau)
+            x = torch.tensor(state, dtype=torch.float32, device=self.device).unsqueeze(0)
+            if deterministic:
+                action = self.actor.deterministic(x)
+            else:
+                action, _ = self.actor.sample(x)
+        return action.squeeze(0).cpu().numpy().astype(np.float32)
+
+    def random_action(self) -> np.ndarray:
+        return np.random.uniform(-1.0, 1.0, size=self.action_dim).astype(np.float32)
 
     def compute_td_errors(self, batch: dict[str, Any]) -> np.ndarray:
         states = torch.tensor(batch["states"], dtype=torch.float32, device=self.device)
-        actions = torch.tensor(batch["actions"], dtype=torch.long, device=self.device)
-        rewards = torch.tensor(batch["rewards"], dtype=torch.float32, device=self.device)
+        actions = torch.tensor(batch["actions"], dtype=torch.float32, device=self.device)
+        rewards = torch.tensor(batch["rewards"], dtype=torch.float32, device=self.device).unsqueeze(1)
         next_states = torch.tensor(batch["next_states"], dtype=torch.float32, device=self.device)
-        dones = torch.tensor(batch["dones"], dtype=torch.float32, device=self.device)
+        dones = torch.tensor(batch["dones"], dtype=torch.float32, device=self.device).unsqueeze(1)
+
         with torch.no_grad():
-            q_sa = self.q(states).gather(1, actions.unsqueeze(1)).squeeze(1)
-            next_actions = self.q(next_states).argmax(dim=1)
-            next_q = self.target(next_states).gather(1, next_actions.unsqueeze(1)).squeeze(1)
-            target = rewards + self.cfg.gamma * (1.0 - dones) * next_q
-            td = target - q_sa
-        return td.abs().cpu().numpy()
+            next_actions, next_log_prob = self.actor.sample(next_states)
+            target_q = torch.min(
+                self.target_q1(next_states, next_actions),
+                self.target_q2(next_states, next_actions),
+            ) - self.alpha.detach() * next_log_prob
+            target = rewards + self.cfg.gamma * (1.0 - dones) * target_q
+            td1 = (target - self.q1(states, actions)).abs()
+            td2 = (target - self.q2(states, actions)).abs()
+            td = 0.5 * (td1 + td2)
+        return td.squeeze(1).cpu().numpy()
 
     def compute_q_discrepancy(self, batch: dict[str, Any]) -> np.ndarray:
         states = torch.tensor(batch["states"], dtype=torch.float32, device=self.device)
-        actions = torch.tensor(batch["actions"], dtype=torch.long, device=self.device)
+        actions = torch.tensor(batch["actions"], dtype=torch.float32, device=self.device)
         with torch.no_grad():
-            q_old = self.q_reference(states).gather(1, actions.unsqueeze(1)).squeeze(1)
-            q_new = self.q_probe(states).gather(1, actions.unsqueeze(1)).squeeze(1)
-            doe = (q_new - q_old).abs()
-        return doe.cpu().numpy()
-
-    def act(self, state: np.ndarray, epsilon: float) -> int:
-        if random.random() < epsilon:
-            return random.randrange(self.n_actions)
-
-        with torch.no_grad():
-            x = torch.tensor(state, dtype=torch.float32, device=self.device).unsqueeze(0)
-            return int(torch.argmax(self.q(x), dim=1).item())
+            old_q = torch.min(
+                self.q1_reference(states, actions),
+                self.q2_reference(states, actions),
+            )
+            new_q = torch.min(
+                self.q1_probe(states, actions),
+                self.q2_probe(states, actions),
+            )
+            doe = (new_q - old_q).abs()
+        return doe.squeeze(1).cpu().numpy()
 
     def update(self, batch: dict[str, Any]) -> dict[str, Any]:
         states = torch.tensor(batch["states"], dtype=torch.float32, device=self.device)
-        actions = torch.tensor(batch["actions"], dtype=torch.long, device=self.device)
-        rewards = torch.tensor(batch["rewards"], dtype=torch.float32, device=self.device)
+        actions = torch.tensor(batch["actions"], dtype=torch.float32, device=self.device)
+        rewards = torch.tensor(batch["rewards"], dtype=torch.float32, device=self.device).unsqueeze(1)
         next_states = torch.tensor(batch["next_states"], dtype=torch.float32, device=self.device)
-        dones = torch.tensor(batch["dones"], dtype=torch.float32, device=self.device)
-        weights = torch.tensor(batch["weights"], dtype=torch.float32, device=self.device)
-
-        q_sa = self.q(states).gather(1, actions.unsqueeze(1)).squeeze(1)
+        dones = torch.tensor(batch["dones"], dtype=torch.float32, device=self.device).unsqueeze(1)
+        weights = torch.tensor(batch["weights"], dtype=torch.float32, device=self.device).unsqueeze(1)
 
         with torch.no_grad():
-            next_actions = self.q(next_states).argmax(dim=1)
-            next_q = self.target(next_states).gather(1, next_actions.unsqueeze(1)).squeeze(1)
-            target = rewards + self.cfg.gamma * (1.0 - dones) * next_q
+            next_actions, next_log_prob = self.actor.sample(next_states)
+            target_q = torch.min(
+                self.target_q1(next_states, next_actions),
+                self.target_q2(next_states, next_actions),
+            ) - self.alpha.detach() * next_log_prob
+            target = rewards + self.cfg.gamma * (1.0 - dones) * target_q
 
-        td = target - q_sa
-        loss = (weights * F.smooth_l1_loss(q_sa, target, reduction="none")).mean()
+        current_q1 = self.q1(states, actions)
+        current_q2 = self.q2(states, actions)
+        q1_loss = (weights * F.mse_loss(current_q1, target, reduction="none")).mean()
+        q2_loss = (weights * F.mse_loss(current_q2, target, reduction="none")).mean()
 
-        self.opt.zero_grad()
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.q.parameters(), max_norm=10.0)
-        self.opt.step()
-        self._ema_update_probe()
+        self.q1_opt.zero_grad()
+        q1_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.q1.parameters(), max_norm=self.cfg.grad_clip_norm)
+        self.q1_opt.step()
+
+        self.q2_opt.zero_grad()
+        q2_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.q2.parameters(), max_norm=self.cfg.grad_clip_norm)
+        self.q2_opt.step()
+
+        new_actions, log_prob = self.actor.sample(states)
+        q_new = torch.min(self.q1(states, new_actions), self.q2(states, new_actions))
+        actor_loss = (self.alpha.detach() * log_prob - q_new).mean()
+
+        self.actor_opt.zero_grad()
+        actor_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.actor.parameters(), max_norm=self.cfg.grad_clip_norm)
+        self.actor_opt.step()
+
+        if self.cfg.auto_entropy_tuning:
+            alpha_loss = -(self.log_alpha * (log_prob + self.target_entropy).detach()).mean()
+            self.alpha_opt.zero_grad()
+            alpha_loss.backward()
+            self.alpha_opt.step()
+        else:
+            alpha_loss = torch.tensor(0.0, device=self.device)
 
         self.update_count += 1
-        if self.update_count % self.cfg.target_update_freq == 0:
-            self.target.load_state_dict(self.q.state_dict())
+        if self.update_count % max(1, int(self.cfg.target_update_interval)) == 0:
+            soft_update(self.target_q1, self.q1, self.cfg.tau)
+            soft_update(self.target_q2, self.q2, self.cfg.tau)
+        self._ema_update_probe()
+
+        td_errors = 0.5 * ((target - current_q1).abs() + (target - current_q2).abs())
 
         return {
-            "loss": float(loss.item()),
-            "td_errors": td.detach().abs().cpu().numpy(),
-            "mean_q": float(q_sa.detach().mean().cpu().item()),
+            "critic_loss": float((q1_loss + q2_loss).detach().cpu().item()),
+            "q1_loss": float(q1_loss.detach().cpu().item()),
+            "q2_loss": float(q2_loss.detach().cpu().item()),
+            "actor_loss": float(actor_loss.detach().cpu().item()),
+            "alpha_loss": float(alpha_loss.detach().cpu().item()),
+            "alpha": float(self.alpha.detach().cpu().item()),
+            "entropy": float((-log_prob).detach().mean().cpu().item()),
+            "td_errors": td_errors.detach().squeeze(1).cpu().numpy(),
+            "mean_q": float(torch.min(current_q1, current_q2).detach().mean().cpu().item()),
         }
 
 
-def make_online_batch(transition: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "states": np.expand_dims(transition["state"], axis=0).astype(np.float32),
-        "actions": np.array([transition["action"]], dtype=np.int64),
-        "rewards": np.array([transition["reward"]], dtype=np.float32),
-        "next_states": np.expand_dims(transition["next_state"], axis=0).astype(np.float32),
-        "dones": np.array([transition["done"]], dtype=np.float32),
-        "regime_labels": np.array([transition["regime_label"]], dtype=np.int64),
-        "boundary_ids": np.array([int(transition.get("boundary_id", 0))], dtype=np.int64),
-        "time_indices": np.array([transition["time_index"]], dtype=np.int64),
-        "dates": [transition["date"]],
-        "indices": np.array([0], dtype=np.int64),
-        "weights": np.ones(1, dtype=np.float32),
-        "sample_sources": np.array(["online_latest"], dtype=object),
-    }
-
-
-def epsilon_at(step: int, cfg: ExperimentConfig) -> float:
-    frac = min(1.0, step / max(1, cfg.epsilon_decay_steps))
-    return cfg.epsilon_start + frac * (cfg.epsilon_end - cfg.epsilon_start)
-
-
-def beta_at(step: int, max_steps: int, cfg: ExperimentConfig) -> float:
+def beta_at(step: int, max_steps: int, cfg: SACExperimentConfig) -> float:
     frac = min(1.0, step / max(1, max_steps))
     return cfg.per_beta_start + frac * (cfg.per_beta_end - cfg.per_beta_start)
 
@@ -928,21 +886,17 @@ def summarize_replay_batch(
     current_regime: int,
     current_step: int,
     td_errors: np.ndarray,
-    replay: str,
 ) -> dict[str, Any]:
     sampled_regime = batch["regime_labels"]
     sample_age = current_step - batch["time_indices"]
 
-    if replay == "online":
-        mismatch_rate = np.nan
-    else:
-        mismatch_rate = float(np.mean(sampled_regime != current_regime))
-
     out: dict[str, Any] = {
-        "mismatch_rate": mismatch_rate,
+        "mismatch_rate": float(np.mean(sampled_regime != current_regime)),
         "mean_sample_age": float(np.mean(sample_age)),
         "median_sample_age": float(np.median(sample_age)),
         "mean_td_error": float(np.mean(td_errors)),
+        "mean_cash_weight": float(np.mean(batch["action_weights"][:, 0])),
+        "mean_max_asset_weight": float(np.mean(np.max(batch["action_weights"][:, 1:], axis=1))),
     }
 
     for r in sorted(np.unique(sampled_regime)):
@@ -969,32 +923,25 @@ def summarize_replay_batch(
         modes = np.asarray(batch["deer_priority_mode"], dtype=object)
         for mode in sorted(set(modes.tolist())):
             out[f"mode_{mode}_count"] = int(np.sum(modes == mode))
-
     if "sample_sources" in batch:
         sources = np.asarray(batch["sample_sources"], dtype=object)
         for src in sorted(set(sources.tolist())):
             out[f"source_{src}_count"] = int(np.sum(sources == src))
-
     return out
 
 
-def make_buffer(cfg: ExperimentConfig) -> ReplayBuffer | None:
-    if cfg.replay == "online":
-        return None
-
+def make_buffer(cfg: SACExperimentConfig) -> ContinuousReplayBuffer:
     if cfg.replay == "uniform":
-        return ReplayBuffer(cfg.buffer_size, cfg.seed)
-
+        return ContinuousReplayBuffer(cfg.buffer_size, cfg.seed)
     if cfg.replay == "per":
-        return PERBuffer(
+        return ContinuousPERBuffer(
             capacity=cfg.buffer_size,
             seed=cfg.seed,
             alpha=cfg.per_alpha,
             eps=cfg.per_eps,
         )
-
     if cfg.replay == "regime":
-        return RegimeAwareReplayBuffer(
+        return ContinuousRegimeAwareReplayBuffer(
             capacity=cfg.buffer_size,
             seed=cfg.seed,
             alpha=cfg.per_alpha,
@@ -1005,25 +952,28 @@ def make_buffer(cfg: ExperimentConfig) -> ReplayBuffer | None:
             random_ratio=cfg.regime_random_ratio,
             recent_window=cfg.regime_recent_window,
         )
-
     if cfg.replay == "deer":
-        return DEERReplayBuffer(
+        return ContinuousDEERReplayBuffer(
             capacity=cfg.buffer_size,
             seed=cfg.seed,
             cfg=cfg,
         )
+    raise ValueError("replay must be one of: uniform, per, regime, deer")
 
-    raise ValueError("replay must be one of: online, uniform, per, regime, deer")
+
+def _output_dir_for(cfg: SACExperimentConfig) -> Path:
+    suffix = f"_{cfg.run_name}" if cfg.run_name else ""
+    return Path(cfg.output_root) / f"{cfg.label_method}_{cfg.replay}_seed{cfg.seed}{suffix}"
 
 
-def run_single_experiment(cfg: ExperimentConfig) -> Path:
+def run_single_experiment(cfg: SACExperimentConfig) -> Path:
     set_seed(cfg.seed)
 
-    env = MarketDQNEnv(cfg)
+    env = MarketSACEnv(cfg)
     buffer = make_buffer(cfg)
-    agent = DQNAgent(env.state_dim, env.n_actions, cfg)
+    agent = SACAgent(env.state_dim, env.action_dim, cfg)
 
-    output_dir = Path(cfg.output_root) / f"{cfg.label_method}_{cfg.replay}_seed{cfg.seed}"
+    output_dir = _output_dir_for(cfg)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     config_dict = cfg.__dict__.copy()
@@ -1032,23 +982,23 @@ def run_single_experiment(cfg: ExperimentConfig) -> Path:
     metadata = {
         "config": config_dict,
         "symbols": env.symbols,
-        "action_names": env.action_names,
+        "weight_names": env.weight_names,
         "feature_cols": env.feature_cols,
         "n_rows": int(len(env.df)),
         "state_dim": int(env.state_dim),
-        "n_actions": int(env.n_actions),
+        "action_dim": int(env.action_dim),
+        "action_transform": "softmax(raw_action / action_temperature)",
     }
     (output_dir / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
     state = env.reset()
     max_steps = len(env.df) - 2
+    if cfg.max_steps > 0:
+        max_steps = min(max_steps, int(cfg.max_steps))
 
     trade_logs: list[dict[str, Any]] = []
     replay_logs: list[dict[str, Any]] = []
 
-    # Boundary state for DEER. Boundaries are detected from external regime labels
-    # before taking the action at the current state, so the first transition in a
-    # new regime is correctly tagged with the new boundary_id.
     current_regime_for_boundary = env.current_regime()
     current_boundary = 0
     deer_n_new = 0
@@ -1065,14 +1015,19 @@ def run_single_experiment(cfg: ExperimentConfig) -> Path:
             if cfg.replay == "deer":
                 agent.freeze_reference()
 
-        eps = epsilon_at(step, cfg)
-        action = agent.act(state, eps)
+        if step < cfg.start_steps:
+            action = agent.random_action()
+            policy_mode = "random_start"
+        else:
+            action = agent.act(state, deterministic=False)
+            policy_mode = "sac_policy"
 
         next_state, reward, done, info = env.step(action)
 
         transition = {
             "state": state,
-            "action": action,
+            "action": action.astype(np.float32),
+            "action_weights": info["action_weights"].astype(np.float32),
             "reward": reward,
             "next_state": next_state,
             "done": done,
@@ -1083,62 +1038,36 @@ def run_single_experiment(cfg: ExperimentConfig) -> Path:
             "boundary_id": current_boundary,
         }
 
-        trade_logs.append(
-            {
-                "step": step,
-                "date": info["date"],
-                "regime_label": info["regime_label"],
-                "regime_name": info["regime_name"],
-                "boundary_id": current_boundary,
-                "boundary_changed": bool(boundary_changed),
-                "deer_s_score": deer_s_score,
-                "action": info["action"],
-                "action_name": info["action_name"],
-                "reward": reward,
-                "portfolio_value": info["portfolio_value"],
-                "drawdown": info["drawdown"],
-                "turnover": info["turnover"],
-                "gross_return": info["gross_return"],
-                "cost": info["cost"],
-                "epsilon": eps,
-            }
-        )
+        trade_row = {
+            "step": step,
+            "date": info["date"],
+            "regime_label": info["regime_label"],
+            "regime_name": info["regime_name"],
+            "boundary_id": current_boundary,
+            "boundary_changed": bool(boundary_changed),
+            "deer_s_score": deer_s_score,
+            "reward": reward,
+            "portfolio_value": info["portfolio_value"],
+            "drawdown": info["drawdown"],
+            "turnover": info["turnover"],
+            "gross_return": info["gross_return"],
+            "cost": info["cost"],
+            "policy_mode": policy_mode,
+        }
+        for name in env.weight_names:
+            trade_row[f"weight_{name}"] = info[f"weight_{name}"]
+            trade_row[f"raw_action_{name}"] = info[f"raw_action_{name}"]
+        trade_logs.append(trade_row)
 
-        if cfg.replay == "online":
-            batch = make_online_batch(transition)
-            update = agent.update(batch)
+        buffer.add(transition)
 
-            replay_diag = summarize_replay_batch(
-                batch=batch,
-                current_regime=env.current_regime(),
-                current_step=step,
-                td_errors=update["td_errors"],
-                replay=cfg.replay,
-            )
-            replay_diag.update(
-                {
-                    "step": step,
-                    "date": env.current_date(),
-                    "current_regime": env.current_regime(),
-                    "loss": update["loss"],
-                    "mean_q": update["mean_q"],
-                    "epsilon": eps,
-                    "beta": 0.0,
-                }
-            )
-            replay_logs.append(replay_diag)
+        if cfg.replay == "deer" and current_boundary > 0:
+            deer_n_new += 1
+            deer_s_score = deer_score_from_new_count(deer_n_new, cfg)
 
-        else:
-            assert buffer is not None
-            buffer.add(transition)
-
-            if cfg.replay == "deer" and current_boundary > 0:
-                deer_n_new += 1
-                deer_s_score = deer_score_from_new_count(deer_n_new, cfg)
-
-            if len(buffer) >= max(cfg.warmup_steps, cfg.batch_size):
+        if len(buffer) >= max(cfg.warmup_steps, cfg.batch_size):
+            for update_idx in range(max(1, int(cfg.updates_per_step))):
                 beta = beta_at(step, max_steps, cfg) if cfg.replay in {"per", "regime", "deer"} else 0.0
-
                 batch = buffer.sample(
                     cfg.batch_size,
                     beta=beta,
@@ -1146,13 +1075,10 @@ def run_single_experiment(cfg: ExperimentConfig) -> Path:
                     current_step=step,
                     current_boundary=current_boundary,
                 )
-
                 update = agent.update(batch)
 
                 if cfg.replay == "deer":
-                    assert isinstance(buffer, DEERReplayBuffer)
-
-                    # Refresh robust scales from an independent uniform probe set.
+                    assert isinstance(buffer, ContinuousDEERReplayBuffer)
                     need_scale_refresh = (
                         buffer.scale_td is None
                         or (current_boundary > 0 and buffer.scale_doe is None)
@@ -1184,7 +1110,7 @@ def run_single_experiment(cfg: ExperimentConfig) -> Path:
                     batch["priorities"] = np.asarray(deer_info["priority"], dtype=np.float32)
 
                 elif cfg.replay in {"per", "regime"}:
-                    assert isinstance(buffer, PERBuffer)
+                    assert isinstance(buffer, ContinuousPERBuffer)
                     buffer.update_priorities(batch["indices"], update["td_errors"])
 
                 replay_diag = summarize_replay_batch(
@@ -1192,18 +1118,22 @@ def run_single_experiment(cfg: ExperimentConfig) -> Path:
                     current_regime=env.current_regime(),
                     current_step=step,
                     td_errors=update["td_errors"],
-                    replay=cfg.replay,
                 )
-
                 replay_diag.update(
                     {
                         "step": step,
                         "date": env.current_date(),
                         "current_regime": env.current_regime(),
                         "current_boundary": current_boundary,
-                        "loss": update["loss"],
+                        "update_idx": update_idx,
+                        "critic_loss": update["critic_loss"],
+                        "q1_loss": update["q1_loss"],
+                        "q2_loss": update["q2_loss"],
+                        "actor_loss": update["actor_loss"],
+                        "alpha_loss": update["alpha_loss"],
+                        "alpha": update["alpha"],
+                        "entropy": update["entropy"],
                         "mean_q": update["mean_q"],
-                        "epsilon": eps,
                         "beta": beta,
                         "deer_s_score": deer_s_score if cfg.replay == "deer" else np.nan,
                         "deer_n_new": deer_n_new if cfg.replay == "deer" else np.nan,
@@ -1219,94 +1149,117 @@ def run_single_experiment(cfg: ExperimentConfig) -> Path:
 
     trade_df = pd.DataFrame(trade_logs)
     replay_df = pd.DataFrame(replay_logs)
-
     trade_df.to_csv(output_dir / "trading_log.csv", index=False)
     replay_df.to_csv(output_dir / "replay_diagnostics.csv", index=False)
 
-    if not replay_df.empty and "mismatch_rate" in replay_df.columns:
-        mean_mismatch_rate = float(replay_df["mismatch_rate"].mean(skipna=True))
-    else:
-        mean_mismatch_rate = np.nan
-
-    if not replay_df.empty and "mean_td_error" in replay_df.columns:
-        mean_td_error = float(replay_df["mean_td_error"].mean())
-    else:
-        mean_td_error = np.nan
-
-    if not replay_df.empty and "mean_priority" in replay_df.columns:
-        mean_priority = float(replay_df["mean_priority"].mean())
-    else:
-        mean_priority = np.nan
-
-    mean_doe = float(replay_df["mean_doe"].mean()) if not replay_df.empty and "mean_doe" in replay_df.columns else np.nan
-    mean_z_doe = float(replay_df["mean_z_doe"].mean()) if not replay_df.empty and "mean_z_doe" in replay_df.columns else np.nan
-    mean_post_boundary_sample_rate = (
-        float(replay_df["post_boundary_sample_rate"].mean())
-        if not replay_df.empty and "post_boundary_sample_rate" in replay_df.columns
-        else np.nan
-    )
+    def replay_mean(column: str) -> float:
+        if replay_df.empty or column not in replay_df.columns:
+            return np.nan
+        return float(replay_df[column].mean(skipna=True))
 
     summary = {
         "label_method": cfg.label_method,
         "replay": cfg.replay,
         "seed": cfg.seed,
+        "run_name": cfg.run_name,
         "final_portfolio_value": float(trade_df["portfolio_value"].iloc[-1]),
         "max_drawdown": float(trade_df["drawdown"].max()),
         "mean_turnover": float(trade_df["turnover"].mean()),
         "mean_reward": float(trade_df["reward"].mean()),
-        "mean_mismatch_rate": mean_mismatch_rate,
-        "mean_td_error": mean_td_error,
-        "mean_priority": mean_priority,
-        "mean_doe": mean_doe,
-        "mean_z_doe": mean_z_doe,
-        "mean_post_boundary_sample_rate": mean_post_boundary_sample_rate,
+        "mean_cash_weight": float(trade_df["weight_cash"].mean()),
+        "mean_mismatch_rate": replay_mean("mismatch_rate"),
+        "mean_td_error": replay_mean("mean_td_error"),
+        "mean_priority": replay_mean("mean_priority"),
+        "mean_doe": replay_mean("mean_doe"),
+        "mean_z_doe": replay_mean("mean_z_doe"),
+        "mean_post_boundary_sample_rate": replay_mean("post_boundary_sample_rate"),
+        "mean_alpha": replay_mean("alpha"),
+        "mean_entropy": replay_mean("entropy"),
+        "actor_lr": cfg.actor_lr,
+        "critic_lr": cfg.critic_lr,
+        "alpha_lr": cfg.alpha_lr,
+        "init_alpha": cfg.init_alpha,
+        "hidden_dim": cfg.hidden_dim,
+        "batch_size": cfg.batch_size,
+        "max_steps": cfg.max_steps,
+        "tau": cfg.tau,
+        "action_temperature": cfg.action_temperature,
     }
-
     pd.DataFrame([summary]).to_csv(output_dir / "summary.csv", index=False)
 
-    mismatch_display = "NA" if np.isnan(mean_mismatch_rate) else f"{mean_mismatch_rate:.4f}"
-
+    mismatch = summary["mean_mismatch_rate"]
+    mismatch_display = "NA" if np.isnan(mismatch) else f"{mismatch:.4f}"
     print(
-        f"[done] {cfg.label_method} | {cfg.replay} | seed={cfg.seed} | "
-        f"final_value={summary['final_portfolio_value']:.4f} | "
-        f"max_dd={summary['max_drawdown']:.4f} | "
-        f"mismatch={mismatch_display}"
+        f"[done] {cfg.label_method} | SAC-{cfg.replay} | seed={cfg.seed} | "
+        f"run={cfg.run_name or 'base'} | final_value={summary['final_portfolio_value']:.4f} | "
+        f"max_dd={summary['max_drawdown']:.4f} | mismatch={mismatch_display}"
     )
-
     return output_dir
 
 
 def run_many(
-    base_cfg: ExperimentConfig,
+    base_cfg: SACExperimentConfig,
     replays: list[str],
     seeds: list[int],
 ) -> pd.DataFrame:
     all_summaries = []
-
     for replay in replays:
         for seed in seeds:
-            cfg = ExperimentConfig(**base_cfg.__dict__)
+            cfg = SACExperimentConfig(**base_cfg.__dict__)
             cfg.replay = replay
             cfg.seed = seed
-
             out_dir = run_single_experiment(cfg)
             all_summaries.append(pd.read_csv(out_dir / "summary.csv"))
 
     summary = pd.concat(all_summaries, ignore_index=True)
-
     analysis_dir = Path(base_cfg.output_root) / "analysis"
     analysis_dir.mkdir(parents=True, exist_ok=True)
 
-    summary_path = analysis_dir / f"{base_cfg.label_method}_dqn_replay_summary.csv"
+    suffix = f"_{base_cfg.run_name}" if base_cfg.run_name else ""
+    summary_path = analysis_dir / f"{base_cfg.label_method}_sac_replay_summary{suffix}.csv"
     summary.to_csv(summary_path, index=False)
-
-    make_plots(base_cfg.output_root, base_cfg.label_method, replays, seeds)
-
+    make_plots(base_cfg.output_root, base_cfg.label_method, replays, seeds, base_cfg.run_name)
     print(f"[summary] wrote {summary_path}")
     return summary
 
 
-def make_plots(output_root: str, label_method: str, replays: list[str], seeds: list[int]) -> None:
+def expand_tuning_grid(path: str | None) -> list[dict[str, Any]]:
+    if not path:
+        return [{}]
+
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    if isinstance(data, list):
+        return [dict(item) for item in data]
+
+    if not isinstance(data, dict):
+        raise ValueError("tuning grid must be a dict of parameter lists or a list of override dicts.")
+
+    parameters = data.get("parameters", data)
+    if not isinstance(parameters, dict):
+        raise ValueError("tuning grid 'parameters' must be a dict.")
+
+    keys = list(parameters.keys())
+    values = []
+    for key in keys:
+        value = parameters[key]
+        if isinstance(value, list):
+            values.append(value)
+        else:
+            values.append([value])
+
+    combos = []
+    for combo in itertools.product(*values):
+        combos.append(dict(zip(keys, combo)))
+    return combos
+
+
+def make_plots(
+    output_root: str,
+    label_method: str,
+    replays: list[str],
+    seeds: list[int],
+    run_name: str = "",
+) -> None:
     analysis_dir = Path(output_root) / "analysis"
     analysis_dir.mkdir(parents=True, exist_ok=True)
     mpl_config_dir = analysis_dir / "mplconfig"
@@ -1319,8 +1272,10 @@ def make_plots(output_root: str, label_method: str, replays: list[str], seeds: l
         print(f"[plot skipped] matplotlib unavailable: {exc}")
         return
 
+    suffix = f"_{run_name}" if run_name else ""
+
     def run_dir(replay: str, seed: int) -> Path:
-        return Path(output_root) / f"{label_method}_{replay}_seed{seed}"
+        return Path(output_root) / f"{label_method}_{replay}_seed{seed}{suffix}"
 
     plt.figure(figsize=(12, 5))
     for replay in replays:
@@ -1329,18 +1284,16 @@ def make_plots(output_root: str, label_method: str, replays: list[str], seeds: l
             if path.exists():
                 df = pd.read_csv(path)
                 plt.plot(df["step"], df["portfolio_value"], label=f"{replay}-seed{seed}", alpha=0.85)
-    plt.title("DQN Trading: Portfolio Value")
+    plt.title("SAC Trading: Portfolio Value")
     plt.xlabel("Step")
     plt.ylabel("Portfolio Value")
     plt.legend()
     plt.tight_layout()
-    plt.savefig(analysis_dir / f"{label_method}_portfolio_value.png", dpi=160)
+    plt.savefig(analysis_dir / f"{label_method}_sac_portfolio_value{suffix}.png", dpi=160)
     plt.close()
 
     plt.figure(figsize=(12, 5))
     for replay in replays:
-        if replay == "online":
-            continue
         for seed in seeds:
             path = run_dir(replay, seed) / "replay_diagnostics.csv"
             if path.exists():
@@ -1352,12 +1305,12 @@ def make_plots(output_root: str, label_method: str, replays: list[str], seeds: l
                         label=f"{replay}-seed{seed}",
                         alpha=0.85,
                     )
-    plt.title("Replay Diagnostics: Mismatch Rate")
+    plt.title("SAC Replay Diagnostics: Mismatch Rate")
     plt.xlabel("Step")
     plt.ylabel("Rolling mismatch rate")
     plt.legend()
     plt.tight_layout()
-    plt.savefig(analysis_dir / f"{label_method}_mismatch_rate.png", dpi=160)
+    plt.savefig(analysis_dir / f"{label_method}_sac_mismatch_rate{suffix}.png", dpi=160)
     plt.close()
 
     plt.figure(figsize=(12, 5))
@@ -1373,12 +1326,12 @@ def make_plots(output_root: str, label_method: str, replays: list[str], seeds: l
                         label=f"{replay}-seed{seed}",
                         alpha=0.85,
                     )
-    plt.title("DQN Diagnostics: TD-error")
+    plt.title("SAC Diagnostics: TD-error")
     plt.xlabel("Step")
     plt.ylabel("Rolling mean TD-error")
     plt.legend()
     plt.tight_layout()
-    plt.savefig(analysis_dir / f"{label_method}_td_error.png", dpi=160)
+    plt.savefig(analysis_dir / f"{label_method}_sac_td_error{suffix}.png", dpi=160)
     plt.close()
 
     plt.figure(figsize=(12, 5))
@@ -1398,14 +1351,13 @@ def make_plots(output_root: str, label_method: str, replays: list[str], seeds: l
                         alpha=0.85,
                     )
                     plotted = True
-
     if plotted:
-        plt.title("Priority Diagnostics: PER vs Regime-aware vs DEER")
+        plt.title("SAC Priority Diagnostics: PER vs Regime-aware vs DEER")
         plt.xlabel("Step")
         plt.ylabel("Rolling mean priority")
         plt.legend()
         plt.tight_layout()
-        plt.savefig(analysis_dir / f"{label_method}_priority.png", dpi=160)
+        plt.savefig(analysis_dir / f"{label_method}_sac_priority{suffix}.png", dpi=160)
     plt.close()
 
     if "deer" in replays:
@@ -1424,49 +1376,23 @@ def make_plots(output_root: str, label_method: str, replays: list[str], seeds: l
                     )
                     plotted = True
         if plotted:
-            plt.title("DEER Diagnostics: Empirical Q-discrepancy")
+            plt.title("SAC DEER Diagnostics: Empirical Q-discrepancy")
             plt.xlabel("Step")
             plt.ylabel("Rolling mean DoE")
             plt.legend()
             plt.tight_layout()
-            plt.savefig(analysis_dir / f"{label_method}_deer_doe.png", dpi=160)
+            plt.savefig(analysis_dir / f"{label_method}_sac_deer_doe{suffix}.png", dpi=160)
         plt.close()
 
-        plt.figure(figsize=(12, 5))
-        plotted = False
-        for seed in seeds:
-            path = run_dir("deer", seed) / "replay_diagnostics.csv"
-            if path.exists():
-                df = pd.read_csv(path)
-                if "deer_s_score" in df.columns:
-                    plt.plot(
-                        df["step"],
-                        df["deer_s_score"].rolling(10, min_periods=1).mean(),
-                        label=f"deer-S-seed{seed}",
-                        alpha=0.85,
-                    )
-                    plotted = True
-        if plotted:
-            plt.title("DEER Diagnostics: S score schedule")
-            plt.xlabel("Step")
-            plt.ylabel("S score")
-            plt.legend()
-            plt.tight_layout()
-            plt.savefig(analysis_dir / f"{label_method}_deer_s_score.png", dpi=160)
-        plt.close()
-
-    # Regime-aware sample source composition
     if "regime" in replays:
         for seed in seeds:
             path = run_dir("regime", seed) / "replay_diagnostics.csv"
             if not path.exists():
                 continue
-
             df = pd.read_csv(path)
             source_cols = [c for c in df.columns if c.startswith("source_") and c.endswith("_count")]
             if not source_cols:
                 continue
-
             plt.figure(figsize=(12, 5))
             for c in source_cols:
                 plt.plot(
@@ -1475,10 +1401,10 @@ def make_plots(output_root: str, label_method: str, replays: list[str], seeds: l
                     label=c.replace("source_", "").replace("_count", ""),
                     alpha=0.85,
                 )
-            plt.title(f"Regime-aware Replay Source Composition, seed={seed}")
+            plt.title(f"SAC Regime-aware Replay Source Composition, seed={seed}")
             plt.xlabel("Step")
             plt.ylabel("Rolling sample count")
             plt.legend()
             plt.tight_layout()
-            plt.savefig(analysis_dir / f"{label_method}_regime_sources_seed{seed}.png", dpi=160)
+            plt.savefig(analysis_dir / f"{label_method}_sac_regime_sources_seed{seed}{suffix}.png", dpi=160)
             plt.close()

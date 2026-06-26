@@ -116,3 +116,35 @@ python scripts/run_dqn_replay.py --deer-min-post-samples 4
 
 This forces each DEER replay batch to include up to 4 current-boundary post
 samples when available, then fills the rest of the batch with PER sampling.
+
+## Run SAC Replay
+
+The DQN runner uses a small discrete action set. The SAC runner changes the
+model to continuous portfolio control: the actor outputs continuous logits, and
+the environment converts them into long-only weights over `cash + tradable
+assets` with a softmax transform.
+
+Run SAC across all label methods, replay variants, and seeds:
+
+```bash
+python scripts/run_sac_replay.py
+```
+
+For a quick smoke run:
+
+```bash
+python scripts/run_sac_replay.py --label-method rule_based --replays uniform --seeds 0 --warmup-steps 32 --start-steps 32 --batch-size 32 --hidden-dim 64 --max-steps 120 --output-root outputs/sac_smoke
+```
+
+For tuning preparation, use the JSON grid template:
+
+```bash
+python scripts/run_sac_replay.py --label-method rule_based --replays uniform,regime --seeds 0,1 --tuning-grid configs/sac_tuning_grid.json
+```
+
+SAC outputs follow the same structure as the DQN runner:
+
+- `trading_log.csv`
+- `replay_diagnostics.csv`
+- `summary.csv`
+- analysis plots under `outputs/sac_replay/analysis/`
