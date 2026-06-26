@@ -98,3 +98,21 @@ Replay diagnostics can then track:
   https://doi.org/10.1146/annurev-financial-102710-144808.
 - Page (1954), CUSUM change detection,
   https://en.wikipedia.org/wiki/CUSUM.
+
+## Run DEER Replay
+
+From the repository root, the default command runs DEER only across all three
+label methods (`rule_based,hmm,recap_cusum`) and seeds `0,1,2`:
+
+```bash
+python scripts/run_dqn_replay.py
+```
+
+To explicitly set the post-boundary floor used by DEER sampling:
+
+```bash
+python scripts/run_dqn_replay.py --deer-min-post-samples 4
+```
+
+This forces each DEER replay batch to include up to 4 current-boundary post
+samples when available, then fills the rest of the batch with PER sampling.
