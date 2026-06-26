@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 import torch
 from torch import nn
+import torch.nn.functional as F
 
 from src.regime_labeling.features import MarketFeatureConfig, build_market_features
 
@@ -31,7 +32,8 @@ class ExperimentConfig:
     # online  = DQN-only / no replay
     # uniform = DQN + Uniform Replay
     # per     = DQN + Prioritized Experience Replay
-    # regime  = DQN + Regime-aware Replay
+    # regime  = DQN + Regime-aware Replay mixture
+    # deer    = DQN + DEER-style TD-error / Q-discrepancy priority
     replay: str = "uniform"
     seed: int = 0
 
@@ -60,6 +62,21 @@ class ExperimentConfig:
     regime_recent_ratio: float = 0.15
     regime_random_ratio: float = 0.10
     regime_recent_window: int = 252
+
+    # DEER-style replay parameters. The MVP uses external regime labels as change points.
+    # At a boundary, the agent freezes a Q snapshot. Priority then combines TD-error
+    # and empirical Q-discrepancy: |Q_probe(s,a) - Q_reference(s,a)|.
+    deer_s0: float = 0.8
+    deer_half_life: int = 5
+    deer_s_floor: float = 0.05
+    deer_lambda: float = 1.0
+    deer_zmax: float = 5.0
+    deer_probe_tau: float = 0.01
+    deer_scale_refresh_freq: int = 5
+    deer_probe_size: int = 2048
+    deer_scale_rho: float = 0.9
+    deer_scale_floor: float = 1e-8
+    deer_min_post_samples: int = 4
 
 
 def set_seed(seed: int) -> None:
@@ -353,6 +370,7 @@ class ReplayBuffer:
         beta: float = 0.0,
         current_regime: int | None = None,
         current_step: int | None = None,
+        current_boundary: int | None = None,
     ) -> dict[str, Any]:
         n = len(self.storage)
         idx = self.rng.choice(n, size=batch_size, replace=n < batch_size)
@@ -370,10 +388,14 @@ class ReplayBuffer:
             "next_states": np.stack([b["next_state"] for b in batch]).astype(np.float32),
             "dones": np.array([b["done"] for b in batch], dtype=np.float32),
             "regime_labels": np.array([b["regime_label"] for b in batch], dtype=np.int64),
+            "boundary_ids": np.array([int(b.get("boundary_id", 0)) for b in batch], dtype=np.int64),
             "time_indices": np.array([b["time_index"] for b in batch], dtype=np.int64),
             "dates": [b["date"] for b in batch],
             "indices": np.array(idx, dtype=np.int64),
             "weights": weights.astype(np.float32),
+            "stored_td_error": np.array([float(b.get("td_error", np.nan)) for b in batch], dtype=np.float32),
+            "stored_doe_raw": np.array([float(b.get("doe_raw", np.nan)) for b in batch], dtype=np.float32),
+            "stored_doe_normalized": np.array([float(b.get("doe_normalized", np.nan)) for b in batch], dtype=np.float32),
         }
 
 
@@ -396,6 +418,7 @@ class PERBuffer(ReplayBuffer):
         beta: float = 0.4,
         current_regime: int | None = None,
         current_step: int | None = None,
+        current_boundary: int | None = None,
     ) -> dict[str, Any]:
         n = len(self.storage)
         p = np.maximum(self.priorities[:n], self.eps)
@@ -469,6 +492,7 @@ class RegimeAwareReplayBuffer(PERBuffer):
         beta: float = 0.4,
         current_regime: int | None = None,
         current_step: int | None = None,
+        current_boundary: int | None = None,
     ) -> dict[str, Any]:
         n = len(self.storage)
         all_idx = np.arange(n, dtype=np.int64)
@@ -524,8 +548,237 @@ class RegimeAwareReplayBuffer(PERBuffer):
         batch = self._pack(idx, weights)
         batch["priorities"] = priorities[idx].astype(np.float32)
         batch["sample_probs"] = priority_probs[idx].astype(np.float32)
+
         batch["sample_sources"] = sources
         return batch
+
+
+def sigmoid_np(x: np.ndarray | float) -> np.ndarray:
+    x_arr = np.asarray(x, dtype=np.float32)
+    return 1.0 / (1.0 + np.exp(-x_arr))
+
+
+def robust_positive_scale(
+    values: np.ndarray,
+    previous: float | None,
+    rho: float,
+    eps: float,
+    floor: float,
+) -> float | None:
+    """Scale-only robust normalization for non-negative diagnostics."""
+    v = np.asarray(values, dtype=np.float64)
+    v = v[np.isfinite(v)]
+    if len(v) == 0:
+        return previous
+
+    med = float(np.median(v))
+    mad = float(np.median(np.abs(v - med)))
+    candidate = med + 1.4826 * mad + eps
+    if not np.isfinite(candidate) or candidate <= floor:
+        return previous
+
+    if previous is None:
+        return float(candidate)
+    return float(rho * previous + (1.0 - rho) * candidate)
+
+
+def deer_score_from_new_count(n_new: int, cfg: ExperimentConfig) -> float:
+    """External-label MVP schedule. First new transition after a boundary uses full S0."""
+    if n_new <= 0:
+        return 0.0
+    age_new = max(int(n_new) - 1, 0)
+    score = float(cfg.deer_s0) * (2.0 ** (-age_new / max(1, int(cfg.deer_half_life))))
+    if score < float(cfg.deer_s_floor):
+        return 0.0
+    return score
+
+
+class DEERReplayBuffer(PERBuffer):
+    """DEER-style replay for the finance DQN MVP.
+
+    This class keeps the PER sampling interface but changes priority updates.
+    External regime labels define boundaries. After a boundary, transitions from the
+    current boundary are treated as post-change; older transitions are treated as
+    pre-change. Priority uses robust-normalized TD-error and empirical Q discrepancy.
+    """
+
+    def __init__(self, capacity: int, seed: int, cfg: ExperimentConfig):
+        super().__init__(capacity=capacity, seed=seed, alpha=cfg.per_alpha, eps=cfg.per_eps)
+        self.cfg = cfg
+        self.scale_td: float | None = None
+        self.scale_doe: float | None = None
+        self.last_scale_refresh_update = -1
+
+    def sample(
+        self,
+        batch_size: int,
+        beta: float = 0.4,
+        current_regime: int | None = None,
+        current_step: int | None = None,
+        current_boundary: int | None = None,
+    ) -> dict[str, Any]:
+        n = len(self.storage)
+        min_post = max(0, int(self.cfg.deer_min_post_samples))
+
+        if current_boundary is None or int(current_boundary) <= 0 or min_post <= 0:
+            batch = super().sample(
+                batch_size=batch_size,
+                beta=beta,
+                current_regime=current_regime,
+                current_step=current_step,
+                current_boundary=current_boundary,
+            )
+            batch["sample_sources"] = np.array(["deer_per"] * len(batch["indices"]), dtype=object)
+            return batch
+
+        all_idx = np.arange(n, dtype=np.int64)
+        priorities = np.maximum(self.priorities[:n], self.eps)
+        global_probs = priorities ** self.alpha
+        global_probs = global_probs / global_probs.sum()
+
+        boundary_ids = np.array([int(b.get("boundary_id", 0)) for b in self.storage], dtype=np.int64)
+        post_candidates = all_idx[boundary_ids == int(current_boundary)]
+        n_post = min(min_post, len(post_candidates), int(batch_size))
+
+        idx_parts: list[np.ndarray] = []
+        source_parts: list[np.ndarray] = []
+
+        if n_post > 0:
+            post_probs = global_probs[post_candidates].astype(np.float64)
+            post_probs = post_probs / post_probs.sum()
+            replace_post = len(post_candidates) < n_post
+            idx_post = self.rng.choice(
+                post_candidates,
+                size=n_post,
+                replace=replace_post,
+                p=post_probs,
+            ).astype(np.int64)
+            idx_parts.append(idx_post)
+            source_parts.append(np.array(["deer_forced_post"] * len(idx_post), dtype=object))
+        else:
+            idx_post = np.array([], dtype=np.int64)
+
+        n_rest = int(batch_size) - int(sum(len(x) for x in idx_parts))
+        if n_rest > 0:
+            remaining = np.setdiff1d(all_idx, idx_post, assume_unique=False)
+            if len(remaining) == 0:
+                remaining = all_idx
+            rest_probs = global_probs[remaining].astype(np.float64)
+            rest_probs = rest_probs / rest_probs.sum()
+            replace_rest = len(remaining) < n_rest
+            idx_rest = self.rng.choice(
+                remaining,
+                size=n_rest,
+                replace=replace_rest,
+                p=rest_probs,
+            ).astype(np.int64)
+            idx_parts.append(idx_rest)
+            source_parts.append(np.array(["deer_per_remainder"] * len(idx_rest), dtype=object))
+
+        idx = np.concatenate(idx_parts).astype(np.int64)
+        sources = np.concatenate(source_parts).astype(object)
+
+        weights = (n * global_probs[idx]) ** (-beta)
+        weights = weights / max(weights.max(), 1e-12)
+
+        batch = self._pack(idx, weights.astype(np.float32))
+        batch["priorities"] = priorities[idx].astype(np.float32)
+        batch["sample_probs"] = global_probs[idx].astype(np.float32)
+        batch["sample_sources"] = sources
+        return batch
+
+    def uniform_probe_batch(self, probe_size: int) -> dict[str, Any]:
+        n = len(self.storage)
+        k = min(int(probe_size), n)
+        if k <= 0:
+            raise ValueError("Cannot create a probe batch from an empty replay buffer.")
+        idx = self.rng.choice(n, size=k, replace=False).astype(np.int64)
+        return self._pack(idx, np.ones(k, dtype=np.float32))
+
+    def refresh_scales(self, td_errors: np.ndarray, doe_values: np.ndarray, allow_doe: bool) -> None:
+        cfg = self.cfg
+        self.scale_td = robust_positive_scale(
+            np.abs(td_errors),
+            self.scale_td,
+            rho=cfg.deer_scale_rho,
+            eps=cfg.per_eps,
+            floor=cfg.deer_scale_floor,
+        )
+        if allow_doe:
+            self.scale_doe = robust_positive_scale(
+                np.abs(doe_values),
+                self.scale_doe,
+                rho=cfg.deer_scale_rho,
+                eps=cfg.per_eps,
+                floor=cfg.deer_scale_floor,
+            )
+
+    def update_deer_priorities(
+        self,
+        indices: np.ndarray,
+        td_errors: np.ndarray,
+        doe_values: np.ndarray,
+        current_boundary: int,
+        s_score: float,
+    ) -> dict[str, np.ndarray | float]:
+        cfg = self.cfg
+        idx = np.asarray(indices, dtype=np.int64)
+        td_abs = np.abs(np.asarray(td_errors, dtype=np.float32))
+        doe_abs = np.abs(np.asarray(doe_values, dtype=np.float32))
+
+        if self.scale_td is None or self.scale_td <= cfg.deer_scale_floor:
+            z_td = td_abs.copy()
+        else:
+            z_td = np.clip(td_abs / max(self.scale_td, cfg.deer_scale_floor), 0.0, cfg.deer_zmax)
+
+        if self.scale_doe is None or self.scale_doe <= cfg.deer_scale_floor:
+            z_doe = np.zeros_like(doe_abs, dtype=np.float32)
+        else:
+            z_doe = np.clip(doe_abs / max(self.scale_doe, cfg.deer_scale_floor), 0.0, cfg.deer_zmax)
+
+        post = np.array(
+            [int(self.storage[int(i)].get("boundary_id", 0)) == int(current_boundary) for i in idx],
+            dtype=bool,
+        )
+
+        # Before the first detected boundary, DEER should behave like PER.
+        if int(current_boundary) <= 0 or self.scale_doe is None:
+            new_p = td_abs + cfg.per_eps
+            source_mode = np.array(["deer_per_fallback"] * len(idx), dtype=object)
+        else:
+            s = float(np.clip(s_score, 0.0, 1.0))
+            p_old = 2.0 * sigmoid_np(-float(cfg.deer_lambda) * z_doe) + cfg.per_eps
+            p_new = (
+                (1.0 - s) * (2.0 * sigmoid_np(z_td) - 1.0)
+                + s * (2.0 * sigmoid_np(float(cfg.deer_lambda) * z_doe) - 1.0)
+                + cfg.per_eps
+            )
+            new_p = np.where(post, p_new, p_old).astype(np.float32)
+            source_mode = np.where(post, "deer_post_change", "deer_pre_change").astype(object)
+
+        new_p = np.maximum(new_p.astype(np.float32), cfg.per_eps)
+        self.priorities[idx] = new_p
+        self.max_priority = max(self.max_priority, float(new_p.max()))
+
+        for j, i in enumerate(idx):
+            rec = self.storage[int(i)]
+            rec["td_error"] = float(td_abs[j])
+            rec["doe_raw"] = float(doe_abs[j])
+            rec["td_normalized"] = float(z_td[j])
+            rec["doe_normalized"] = float(z_doe[j])
+            rec["priority"] = float(new_p[j])
+            rec["deer_is_post_change"] = bool(post[j])
+            rec["deer_s_score"] = float(s_score)
+
+        return {
+            "priority": new_p,
+            "z_td": z_td.astype(np.float32),
+            "z_doe": z_doe.astype(np.float32),
+            "is_post_change": post,
+            "source_mode": source_mode,
+            "scale_td": np.array([np.nan if self.scale_td is None else self.scale_td], dtype=np.float32),
+            "scale_doe": np.array([np.nan if self.scale_doe is None else self.scale_doe], dtype=np.float32),
+        }
 
 
 class QNetwork(nn.Module):
@@ -552,9 +805,52 @@ class DQNAgent:
         self.target = QNetwork(state_dim, n_actions, cfg.hidden_dim).to(self.device)
         self.target.load_state_dict(self.q.state_dict())
 
+        # q_probe is an EMA critic used for a less noisy empirical Q-discrepancy.
+        # q_reference is frozen at each externally detected regime boundary.
+        self.q_probe = QNetwork(state_dim, n_actions, cfg.hidden_dim).to(self.device)
+        self.q_probe.load_state_dict(self.q.state_dict())
+        self.q_reference = QNetwork(state_dim, n_actions, cfg.hidden_dim).to(self.device)
+        self.q_reference.load_state_dict(self.q_probe.state_dict())
+        for p in self.q_probe.parameters():
+            p.requires_grad_(False)
+        for p in self.q_reference.parameters():
+            p.requires_grad_(False)
+
         self.opt = torch.optim.Adam(self.q.parameters(), lr=cfg.lr)
         self.update_count = 0
         self.n_actions = n_actions
+
+    def freeze_reference(self) -> None:
+        self.q_reference.load_state_dict(self.q_probe.state_dict())
+
+    def _ema_update_probe(self) -> None:
+        tau = float(self.cfg.deer_probe_tau)
+        with torch.no_grad():
+            for probe_param, q_param in zip(self.q_probe.parameters(), self.q.parameters()):
+                probe_param.data.mul_(1.0 - tau).add_(q_param.data, alpha=tau)
+
+    def compute_td_errors(self, batch: dict[str, Any]) -> np.ndarray:
+        states = torch.tensor(batch["states"], dtype=torch.float32, device=self.device)
+        actions = torch.tensor(batch["actions"], dtype=torch.long, device=self.device)
+        rewards = torch.tensor(batch["rewards"], dtype=torch.float32, device=self.device)
+        next_states = torch.tensor(batch["next_states"], dtype=torch.float32, device=self.device)
+        dones = torch.tensor(batch["dones"], dtype=torch.float32, device=self.device)
+        with torch.no_grad():
+            q_sa = self.q(states).gather(1, actions.unsqueeze(1)).squeeze(1)
+            next_actions = self.q(next_states).argmax(dim=1)
+            next_q = self.target(next_states).gather(1, next_actions.unsqueeze(1)).squeeze(1)
+            target = rewards + self.cfg.gamma * (1.0 - dones) * next_q
+            td = target - q_sa
+        return td.abs().cpu().numpy()
+
+    def compute_q_discrepancy(self, batch: dict[str, Any]) -> np.ndarray:
+        states = torch.tensor(batch["states"], dtype=torch.float32, device=self.device)
+        actions = torch.tensor(batch["actions"], dtype=torch.long, device=self.device)
+        with torch.no_grad():
+            q_old = self.q_reference(states).gather(1, actions.unsqueeze(1)).squeeze(1)
+            q_new = self.q_probe(states).gather(1, actions.unsqueeze(1)).squeeze(1)
+            doe = (q_new - q_old).abs()
+        return doe.cpu().numpy()
 
     def act(self, state: np.ndarray, epsilon: float) -> int:
         if random.random() < epsilon:
@@ -575,16 +871,18 @@ class DQNAgent:
         q_sa = self.q(states).gather(1, actions.unsqueeze(1)).squeeze(1)
 
         with torch.no_grad():
-            next_q = self.target(next_states).max(dim=1).values
+            next_actions = self.q(next_states).argmax(dim=1)
+            next_q = self.target(next_states).gather(1, next_actions.unsqueeze(1)).squeeze(1)
             target = rewards + self.cfg.gamma * (1.0 - dones) * next_q
 
         td = target - q_sa
-        loss = (weights * td.pow(2)).mean()
+        loss = (weights * F.smooth_l1_loss(q_sa, target, reduction="none")).mean()
 
         self.opt.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(self.q.parameters(), max_norm=10.0)
         self.opt.step()
+        self._ema_update_probe()
 
         self.update_count += 1
         if self.update_count % self.cfg.target_update_freq == 0:
@@ -605,6 +903,7 @@ def make_online_batch(transition: dict[str, Any]) -> dict[str, Any]:
         "next_states": np.expand_dims(transition["next_state"], axis=0).astype(np.float32),
         "dones": np.array([transition["done"]], dtype=np.float32),
         "regime_labels": np.array([transition["regime_label"]], dtype=np.int64),
+        "boundary_ids": np.array([int(transition.get("boundary_id", 0))], dtype=np.int64),
         "time_indices": np.array([transition["time_index"]], dtype=np.int64),
         "dates": [transition["date"]],
         "indices": np.array([0], dtype=np.int64),
@@ -657,6 +956,19 @@ def summarize_replay_batch(
         out["mean_priority"] = float(np.mean(batch["priorities"]))
         out["mean_sample_prob"] = float(np.mean(batch["sample_probs"]))
 
+    if "doe_values" in batch:
+        out["mean_doe"] = float(np.mean(batch["doe_values"]))
+    if "z_doe_values" in batch:
+        out["mean_z_doe"] = float(np.mean(batch["z_doe_values"]))
+    if "z_td_values" in batch:
+        out["mean_z_td"] = float(np.mean(batch["z_td_values"]))
+    if "deer_is_post_change" in batch:
+        out["post_boundary_sample_rate"] = float(np.mean(batch["deer_is_post_change"]))
+    if "deer_priority_mode" in batch:
+        modes = np.asarray(batch["deer_priority_mode"], dtype=object)
+        for mode in sorted(set(modes.tolist())):
+            out[f"mode_{mode}_count"] = int(np.sum(modes == mode))
+
     if "sample_sources" in batch:
         sources = np.asarray(batch["sample_sources"], dtype=object)
         for src in sorted(set(sources.tolist())):
@@ -693,7 +1005,14 @@ def make_buffer(cfg: ExperimentConfig) -> ReplayBuffer | None:
             recent_window=cfg.regime_recent_window,
         )
 
-    raise ValueError("replay must be one of: online, uniform, per, regime")
+    if cfg.replay == "deer":
+        return DEERReplayBuffer(
+            capacity=cfg.buffer_size,
+            seed=cfg.seed,
+            cfg=cfg,
+        )
+
+    raise ValueError("replay must be one of: online, uniform, per, regime, deer")
 
 
 def run_single_experiment(cfg: ExperimentConfig) -> Path:
@@ -726,7 +1045,25 @@ def run_single_experiment(cfg: ExperimentConfig) -> Path:
     trade_logs: list[dict[str, Any]] = []
     replay_logs: list[dict[str, Any]] = []
 
+    # Boundary state for DEER. Boundaries are detected from external regime labels
+    # before taking the action at the current state, so the first transition in a
+    # new regime is correctly tagged with the new boundary_id.
+    current_regime_for_boundary = env.current_regime()
+    current_boundary = 0
+    deer_n_new = 0
+    deer_s_score = 0.0
+
     for step in range(max_steps):
+        step_regime = env.current_regime()
+        boundary_changed = step > 0 and step_regime != current_regime_for_boundary
+        if boundary_changed:
+            current_boundary += 1
+            current_regime_for_boundary = step_regime
+            deer_n_new = 0
+            deer_s_score = cfg.deer_s0
+            if cfg.replay == "deer":
+                agent.freeze_reference()
+
         eps = epsilon_at(step, cfg)
         action = agent.act(state, eps)
 
@@ -742,6 +1079,7 @@ def run_single_experiment(cfg: ExperimentConfig) -> Path:
             "regime_label": info["regime_label"],
             "regime_name": info["regime_name"],
             "time_index": info["time_index"],
+            "boundary_id": current_boundary,
         }
 
         trade_logs.append(
@@ -750,6 +1088,9 @@ def run_single_experiment(cfg: ExperimentConfig) -> Path:
                 "date": info["date"],
                 "regime_label": info["regime_label"],
                 "regime_name": info["regime_name"],
+                "boundary_id": current_boundary,
+                "boundary_changed": bool(boundary_changed),
+                "deer_s_score": deer_s_score,
                 "action": info["action"],
                 "action_name": info["action_name"],
                 "reward": reward,
@@ -790,19 +1131,58 @@ def run_single_experiment(cfg: ExperimentConfig) -> Path:
             assert buffer is not None
             buffer.add(transition)
 
+            if cfg.replay == "deer" and current_boundary > 0:
+                deer_n_new += 1
+                deer_s_score = deer_score_from_new_count(deer_n_new, cfg)
+
             if len(buffer) >= max(cfg.warmup_steps, cfg.batch_size):
-                beta = beta_at(step, max_steps, cfg) if cfg.replay in {"per", "regime"} else 0.0
+                beta = beta_at(step, max_steps, cfg) if cfg.replay in {"per", "regime", "deer"} else 0.0
 
                 batch = buffer.sample(
                     cfg.batch_size,
                     beta=beta,
                     current_regime=env.current_regime(),
                     current_step=step,
+                    current_boundary=current_boundary,
                 )
 
                 update = agent.update(batch)
 
-                if cfg.replay in {"per", "regime"}:
+                if cfg.replay == "deer":
+                    assert isinstance(buffer, DEERReplayBuffer)
+
+                    # Refresh robust scales from an independent uniform probe set.
+                    need_scale_refresh = (
+                        buffer.scale_td is None
+                        or (current_boundary > 0 and buffer.scale_doe is None)
+                        or (agent.update_count % max(1, cfg.deer_scale_refresh_freq) == 0)
+                    )
+                    if need_scale_refresh and len(buffer) > 0:
+                        probe = buffer.uniform_probe_batch(cfg.deer_probe_size)
+                        td_probe = agent.compute_td_errors(probe)
+                        doe_probe = agent.compute_q_discrepancy(probe)
+                        buffer.refresh_scales(
+                            td_errors=td_probe,
+                            doe_values=doe_probe,
+                            allow_doe=current_boundary > 0,
+                        )
+
+                    doe_values = agent.compute_q_discrepancy(batch)
+                    deer_info = buffer.update_deer_priorities(
+                        indices=batch["indices"],
+                        td_errors=update["td_errors"],
+                        doe_values=doe_values,
+                        current_boundary=current_boundary,
+                        s_score=deer_s_score,
+                    )
+                    batch["doe_values"] = doe_values.astype(np.float32)
+                    batch["z_td_values"] = np.asarray(deer_info["z_td"], dtype=np.float32)
+                    batch["z_doe_values"] = np.asarray(deer_info["z_doe"], dtype=np.float32)
+                    batch["deer_is_post_change"] = np.asarray(deer_info["is_post_change"], dtype=bool)
+                    batch["deer_priority_mode"] = np.asarray(deer_info["source_mode"], dtype=object)
+                    batch["priorities"] = np.asarray(deer_info["priority"], dtype=np.float32)
+
+                elif cfg.replay in {"per", "regime"}:
                     assert isinstance(buffer, PERBuffer)
                     buffer.update_priorities(batch["indices"], update["td_errors"])
 
@@ -819,10 +1199,15 @@ def run_single_experiment(cfg: ExperimentConfig) -> Path:
                         "step": step,
                         "date": env.current_date(),
                         "current_regime": env.current_regime(),
+                        "current_boundary": current_boundary,
                         "loss": update["loss"],
                         "mean_q": update["mean_q"],
                         "epsilon": eps,
                         "beta": beta,
+                        "deer_s_score": deer_s_score if cfg.replay == "deer" else np.nan,
+                        "deer_n_new": deer_n_new if cfg.replay == "deer" else np.nan,
+                        "scale_td": getattr(buffer, "scale_td", np.nan),
+                        "scale_doe": getattr(buffer, "scale_doe", np.nan),
                     }
                 )
                 replay_logs.append(replay_diag)
@@ -852,6 +1237,14 @@ def run_single_experiment(cfg: ExperimentConfig) -> Path:
     else:
         mean_priority = np.nan
 
+    mean_doe = float(replay_df["mean_doe"].mean()) if not replay_df.empty and "mean_doe" in replay_df.columns else np.nan
+    mean_z_doe = float(replay_df["mean_z_doe"].mean()) if not replay_df.empty and "mean_z_doe" in replay_df.columns else np.nan
+    mean_post_boundary_sample_rate = (
+        float(replay_df["post_boundary_sample_rate"].mean())
+        if not replay_df.empty and "post_boundary_sample_rate" in replay_df.columns
+        else np.nan
+    )
+
     summary = {
         "label_method": cfg.label_method,
         "replay": cfg.replay,
@@ -863,6 +1256,9 @@ def run_single_experiment(cfg: ExperimentConfig) -> Path:
         "mean_mismatch_rate": mean_mismatch_rate,
         "mean_td_error": mean_td_error,
         "mean_priority": mean_priority,
+        "mean_doe": mean_doe,
+        "mean_z_doe": mean_z_doe,
+        "mean_post_boundary_sample_rate": mean_post_boundary_sample_rate,
     }
 
     pd.DataFrame([summary]).to_csv(output_dir / "summary.csv", index=False)
@@ -983,7 +1379,7 @@ def make_plots(output_root: str, label_method: str, replays: list[str], seeds: l
 
     plt.figure(figsize=(12, 5))
     plotted = False
-    for replay in ["per", "regime"]:
+    for replay in ["per", "regime", "deer"]:
         if replay not in replays:
             continue
         for seed in seeds:
@@ -1000,13 +1396,60 @@ def make_plots(output_root: str, label_method: str, replays: list[str], seeds: l
                     plotted = True
 
     if plotted:
-        plt.title("Priority Diagnostics: PER vs Regime-aware")
+        plt.title("Priority Diagnostics: PER vs Regime-aware vs DEER")
         plt.xlabel("Step")
         plt.ylabel("Rolling mean priority")
         plt.legend()
         plt.tight_layout()
         plt.savefig(analysis_dir / f"{label_method}_priority.png", dpi=160)
     plt.close()
+
+    if "deer" in replays:
+        plt.figure(figsize=(12, 5))
+        plotted = False
+        for seed in seeds:
+            path = run_dir("deer", seed) / "replay_diagnostics.csv"
+            if path.exists():
+                df = pd.read_csv(path)
+                if "mean_doe" in df.columns:
+                    plt.plot(
+                        df["step"],
+                        df["mean_doe"].rolling(50, min_periods=1).mean(),
+                        label=f"deer-doe-seed{seed}",
+                        alpha=0.85,
+                    )
+                    plotted = True
+        if plotted:
+            plt.title("DEER Diagnostics: Empirical Q-discrepancy")
+            plt.xlabel("Step")
+            plt.ylabel("Rolling mean DoE")
+            plt.legend()
+            plt.tight_layout()
+            plt.savefig(analysis_dir / f"{label_method}_deer_doe.png", dpi=160)
+        plt.close()
+
+        plt.figure(figsize=(12, 5))
+        plotted = False
+        for seed in seeds:
+            path = run_dir("deer", seed) / "replay_diagnostics.csv"
+            if path.exists():
+                df = pd.read_csv(path)
+                if "deer_s_score" in df.columns:
+                    plt.plot(
+                        df["step"],
+                        df["deer_s_score"].rolling(10, min_periods=1).mean(),
+                        label=f"deer-S-seed{seed}",
+                        alpha=0.85,
+                    )
+                    plotted = True
+        if plotted:
+            plt.title("DEER Diagnostics: S score schedule")
+            plt.xlabel("Step")
+            plt.ylabel("S score")
+            plt.legend()
+            plt.tight_layout()
+            plt.savefig(analysis_dir / f"{label_method}_deer_s_score.png", dpi=160)
+        plt.close()
 
     # Regime-aware sample source composition
     if "regime" in replays:
