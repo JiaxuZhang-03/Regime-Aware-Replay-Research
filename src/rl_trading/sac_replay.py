@@ -23,6 +23,7 @@ from src.rl_trading.dqn_replay import (
     robust_positive_scale,
     sigmoid_np,
 )
+from src.rl_trading.policy_safety import apply_policy_safety, safety_config_from_object
 
 
 LOG_STD_MIN = -20.0
@@ -42,6 +43,15 @@ class SACExperimentConfig:
 
     transaction_cost_bps: float = 10.0
     action_temperature: float = 1.0
+    safety_enabled: bool = True
+    safety_min_cash_weight: float = 0.03
+    safety_max_asset_weight: float = 0.85
+    safety_max_turnover: float = 0.75
+    safety_regime_blend: float = 0.20
+    safety_risk_on_cash: float = 0.05
+    safety_sideways_cash: float = 0.25
+    safety_high_vol_cash: float = 0.55
+    safety_risk_off_cash: float = 0.70
 
     # Methods:
     # uniform = SAC + Uniform Replay
@@ -212,6 +222,7 @@ class MarketSACEnv:
         self.state_dim = len(self.feature_cols) + self.action_dim
         self.cost_rate = cfg.transaction_cost_bps / 10000.0
         self.action_temperature = max(float(cfg.action_temperature), 1e-6)
+        self.safety_config = safety_config_from_object(cfg)
         self.reset()
 
     def reset(self) -> np.ndarray:
@@ -246,7 +257,14 @@ class MarketSACEnv:
         done = next_t >= len(self.df) - 1
 
         next_row = self.df.iloc[next_t]
-        new_weights = self.action_to_weights(raw_action)
+        proposed_weights = self.action_to_weights(raw_action)
+        new_weights, safety_info = apply_policy_safety(
+            proposed_weights=proposed_weights,
+            previous_weights=self.prev_weights,
+            regime_label=int(current["regime_label"]),
+            regime_name=str(current["regime_name"]),
+            cfg=self.safety_config,
+        )
         asset_weights = new_weights[1:]
         turnover = float(np.abs(new_weights - self.prev_weights).sum())
 
@@ -270,10 +288,14 @@ class MarketSACEnv:
             "gross_return": float(gross_return),
             "cost": float(cost),
             "action": raw_action.copy(),
+            "proposed_action_weights": proposed_weights.copy(),
             "action_weights": new_weights.copy(),
+            **safety_info,
         }
         for name, weight in zip(self.weight_names, new_weights):
             info[f"weight_{name}"] = float(weight)
+        for name, weight in zip(self.weight_names, proposed_weights):
+            info[f"proposed_weight_{name}"] = float(weight)
         for name, value in zip(self.weight_names, raw_action):
             info[f"raw_action_{name}"] = float(value)
 
@@ -988,6 +1010,13 @@ def run_single_experiment(cfg: SACExperimentConfig) -> Path:
         "state_dim": int(env.state_dim),
         "action_dim": int(env.action_dim),
         "action_transform": "softmax(raw_action / action_temperature)",
+        "policy_safety": {
+            "enabled": bool(cfg.safety_enabled),
+            "min_cash_weight": float(cfg.safety_min_cash_weight),
+            "max_asset_weight": float(cfg.safety_max_asset_weight),
+            "max_turnover": float(cfg.safety_max_turnover),
+            "regime_blend": float(cfg.safety_regime_blend),
+        },
     }
     (output_dir / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
@@ -1028,6 +1057,7 @@ def run_single_experiment(cfg: SACExperimentConfig) -> Path:
             "state": state,
             "action": action.astype(np.float32),
             "action_weights": info["action_weights"].astype(np.float32),
+            "proposed_action_weights": info["proposed_action_weights"].astype(np.float32),
             "reward": reward,
             "next_state": next_state,
             "done": done,
@@ -1053,9 +1083,14 @@ def run_single_experiment(cfg: SACExperimentConfig) -> Path:
             "gross_return": info["gross_return"],
             "cost": info["cost"],
             "policy_mode": policy_mode,
+            "safety_blend": info["safety_blend"],
+            "safety_turnover_before_cap": info["safety_turnover_before_cap"],
+            "safety_turnover_after_cap": info["safety_turnover_after_cap"],
+            "safety_anchor_cash": info["safety_anchor_cash"],
         }
         for name in env.weight_names:
             trade_row[f"weight_{name}"] = info[f"weight_{name}"]
+            trade_row[f"proposed_weight_{name}"] = info[f"proposed_weight_{name}"]
             trade_row[f"raw_action_{name}"] = info[f"raw_action_{name}"]
         trade_logs.append(trade_row)
 
@@ -1167,6 +1202,12 @@ def run_single_experiment(cfg: SACExperimentConfig) -> Path:
         "mean_turnover": float(trade_df["turnover"].mean()),
         "mean_reward": float(trade_df["reward"].mean()),
         "mean_cash_weight": float(trade_df["weight_cash"].mean()),
+        "mean_proposed_cash_weight": float(trade_df["proposed_weight_cash"].mean()),
+        "mean_safety_turnover_cap_delta": float(
+            (trade_df["safety_turnover_before_cap"] - trade_df["safety_turnover_after_cap"]).mean()
+        ),
+        "safety_enabled": bool(cfg.safety_enabled),
+        "safety_regime_blend": cfg.safety_regime_blend,
         "mean_mismatch_rate": replay_mean("mismatch_rate"),
         "mean_td_error": replay_mean("mean_td_error"),
         "mean_priority": replay_mean("mean_priority"),

@@ -148,3 +148,30 @@ SAC outputs follow the same structure as the DQN runner:
 - `replay_diagnostics.csv`
 - `summary.csv`
 - analysis plots under `outputs/sac_replay/analysis/`
+
+## Run the RL Model Library
+
+For generalization experiments, use the model-library runner to call multiple
+RL models under the same regime labels, replay settings, and safety rules:
+
+```bash
+python scripts/run_rl_library.py --models dqn,sac --label-method rule_based --replays uniform,regime,deer --seeds 0 --max-steps 120
+```
+
+The shared policy-safety layer is enabled by default for DQN and SAC. It acts as
+a lightweight ReCAP-inspired regime gate: each model's proposed portfolio is
+blended with a small regime-conditioned anchor policy library, then constrained
+by minimum cash, maximum single-asset weight, and turnover caps. This is meant
+to reduce degenerate strategies across models before full backtest validation.
+
+Disable the guard for ablations:
+
+```bash
+python scripts/run_rl_library.py --models dqn,sac --disable-policy-safety
+```
+
+The combined model summary is written to:
+
+```text
+outputs/rl_library/analysis/rl_library_summary.csv
+```
