@@ -1,0 +1,624 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DEER Method Intuitive Explainer</title>
+  <style>
+    :root {
+      --ink: #111827;
+      --muted: #5b6472;
+      --lavender: #d9d7ef;
+      --purple: #3730a3;
+      --blue: #1d4ed8;
+      --green: #047857;
+      --orange: #b45309;
+      --red: #b91c1c;
+      --line: #d9dee8;
+      --soft: #f6f7fb;
+      --blue-soft: #eff6ff;
+      --green-soft: #ecfdf5;
+      --orange-soft: #fff7ed;
+      --red-soft: #fef2f2;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: #eef0f4;
+      font-family: Arial, "Microsoft YaHei", "PingFang SC", sans-serif;
+    }
+
+    .deck {
+      max-width: 1440px;
+      margin: 0 auto;
+      background: #fff;
+    }
+
+    .slide {
+      min-height: 860px;
+      background: #fff;
+      border-bottom: 1px solid var(--line);
+      page-break-after: always;
+    }
+
+    .topbar {
+      padding: 30px 46px 52px;
+      background: var(--lavender);
+    }
+
+    .topbar h1 {
+      margin: 0;
+      font-size: 46px;
+      line-height: 1.15;
+      font-weight: 500;
+      letter-spacing: 0;
+    }
+
+    .content { padding: 38px 54px 50px; }
+
+    .subtitle {
+      margin: 0 0 34px;
+      font-size: 29px;
+      line-height: 1.4;
+    }
+
+    h2 {
+      margin: 0 0 18px;
+      font-size: 31px;
+      line-height: 1.2;
+    }
+
+    h3 {
+      margin: 24px 0 12px;
+      font-size: 24px;
+      line-height: 1.25;
+    }
+
+    p {
+      margin: 0 0 16px;
+      font-size: 24px;
+      line-height: 1.48;
+    }
+
+    ul {
+      margin: 0 0 22px;
+      padding: 0;
+      list-style: none;
+    }
+
+    li {
+      position: relative;
+      margin: 0 0 15px;
+      padding-left: 35px;
+      font-size: 24px;
+      line-height: 1.42;
+    }
+
+    li::before {
+      content: "";
+      position: absolute;
+      left: 4px;
+      top: 10px;
+      width: 14px;
+      height: 14px;
+      background: var(--purple);
+    }
+
+    code {
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: #eef0f5;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: .92em;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 32px;
+      align-items: start;
+    }
+
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 20px;
+      align-items: stretch;
+    }
+
+    .panel {
+      min-height: 100%;
+      padding: 22px 24px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .panel h3 { margin-top: 0; }
+    .panel p, .panel li { font-size: 21px; }
+
+    .blue { border-top: 7px solid var(--blue); background: var(--blue-soft); }
+    .green { border-top: 7px solid var(--green); background: var(--green-soft); }
+    .orange { border-top: 7px solid var(--orange); background: var(--orange-soft); }
+    .red { border-top: 7px solid var(--red); background: var(--red-soft); }
+
+    .callout {
+      margin: 22px 0;
+      padding: 18px 22px;
+      border-left: 7px solid var(--purple);
+      background: var(--soft);
+      font-size: 24px;
+      line-height: 1.46;
+    }
+
+    .formula {
+      margin: 18px 0;
+      padding: 20px 24px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #f8fafc;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 24px;
+      line-height: 1.5;
+      text-align: center;
+      white-space: pre-wrap;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: 1fr 60px 1fr 60px 1fr;
+      gap: 10px;
+      align-items: center;
+      margin: 26px 0;
+    }
+
+    .flow-box {
+      min-height: 145px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding: 18px;
+      border: 2px solid var(--line);
+      border-radius: 8px;
+      text-align: center;
+      font-size: 22px;
+      line-height: 1.35;
+      background: #fff;
+    }
+
+    .flow-box strong {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--purple);
+      font-size: 24px;
+    }
+
+    .arrow {
+      color: var(--purple);
+      font-size: 38px;
+      font-weight: 700;
+      text-align: center;
+    }
+
+    .timeline {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 18px;
+      margin-top: 24px;
+    }
+
+    .stage {
+      min-height: 230px;
+      padding: 21px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .stage strong {
+      display: block;
+      margin-bottom: 12px;
+      color: var(--purple);
+      font-size: 25px;
+    }
+
+    .stage p { font-size: 21px; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 20px;
+      line-height: 1.4;
+    }
+
+    th, td {
+      padding: 12px 13px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+      text-align: left;
+    }
+
+    th { background: var(--soft); font-weight: 800; }
+
+    .tag {
+      display: inline-block;
+      margin: 0 7px 8px 0;
+      padding: 6px 11px;
+      border-radius: 999px;
+      color: #fff;
+      font-size: 17px;
+      font-weight: 700;
+    }
+
+    .tag-blue { background: var(--blue); }
+    .tag-green { background: var(--green); }
+    .tag-orange { background: var(--orange); }
+    .tag-red { background: var(--red); }
+
+    .speaker {
+      margin-top: 24px;
+      padding: 17px 20px;
+      border: 1px dashed #9ca3af;
+      background: #fff;
+      color: #384152;
+      font-size: 20px;
+      line-height: 1.45;
+    }
+
+    .speaker strong { color: var(--purple); }
+
+    .small {
+      color: var(--muted);
+      font-size: 18px;
+      line-height: 1.45;
+    }
+
+    @media print {
+      body { background: #fff; }
+      .deck { max-width: none; }
+      .slide { min-height: 100vh; border: 0; }
+    }
+
+    @media (max-width: 900px) {
+      .topbar { padding: 24px 22px 40px; }
+      .topbar h1 { font-size: 34px; }
+      .content { padding: 28px 24px 38px; }
+      .grid-2, .grid-3, .flow, .timeline { grid-template-columns: 1fr; }
+      .arrow { transform: rotate(90deg); }
+      .subtitle, p, li { font-size: 21px; }
+      table { font-size: 17px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="deck">
+    <section class="slide">
+      <div class="topbar"><h1>DEER Method / 直觉讲解</h1></div>
+      <div class="content">
+        <p class="subtitle"><strong>Sample Efficient Experience Replay in Non-stationary Environments</strong><br>今晚只回答一个问题：环境变了以后，replay buffer 应该复习哪些经验？</p>
+
+        <div class="grid-3">
+          <div class="panel blue">
+            <h3>PER 的信号</h3>
+            <p><code>TD-error</code></p>
+            <p>agent 对这条 transition 预测错了多少。</p>
+          </div>
+          <div class="panel orange">
+            <h3>DEER 新增的信号</h3>
+            <p><code>DoE</code></p>
+            <p>环境变化让这条 state-action 的价值改变了多少。</p>
+          </div>
+          <div class="panel green">
+            <h3>最终目标</h3>
+            <p>变化期先适应新环境，稳定后再选择性复用旧经验。</p>
+          </div>
+        </div>
+
+        <div class="callout">
+          一句话：DEER 不是简单地“忘记旧数据”，而是区分哪些旧经验已经过时、哪些旧经验跨环境仍然有用。
+        </div>
+
+        <div class="speaker"><strong>讲述提示：</strong>先不要讲公式。用“地面从干燥变湿滑，过去走路经验有些失效、有些仍适用”的例子开始。</div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="topbar"><h1>1 / 为什么 PER 在环境变化后可能出错</h1></div>
+      <div class="content">
+        <div class="grid-2">
+          <div>
+            <h2>Stationary 情况</h2>
+            <div class="formula">高 TD-error
+→ agent 还没有学好
+→ 多复习通常有价值</div>
+            <p>这正是 Prioritized Experience Replay 的核心逻辑。</p>
+          </div>
+          <div>
+            <h2>Non-stationary 情况</h2>
+            <div class="formula">高 TD-error
+→ 可能是 agent 没学好
+→ 也可能是环境已经变了</div>
+            <p>PER 无法判断这两个原因，可能不断抽取已经不适用于当前环境的旧 transition。</p>
+          </div>
+        </div>
+
+        <div class="flow">
+          <div class="flow-box"><strong>旧环境</strong>同一动作产生正收益</div>
+          <div class="arrow">→</div>
+          <div class="flow-box"><strong>Regime Shift</strong>dynamics / reward 改变</div>
+          <div class="arrow">→</div>
+          <div class="flow-box"><strong>PER</strong>旧经验 TD-error 变大，反而被频繁抽取</div>
+        </div>
+
+        <div class="callout">DEER 的出发点：<strong>高 TD-error 不等于高 current-environment relevance。</strong></div>
+        <div class="speaker"><strong>讲述提示：</strong>联系我们的结果：PER mismatch 为 0.5785，比 Uniform 的 0.5674 还高，与这一直觉一致，但还不能证明因果。</div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="topbar"><h1>2 / 第一步：先检测环境是否变化</h1></div>
+      <div class="content">
+        <p class="subtitle">DEER 不直接观察 friction 或 damping，而是比较相邻时间窗口的 <strong>reward sequence distribution</strong>。</p>
+
+        <div class="flow">
+          <div class="flow-box"><strong>Reference Window</strong>较早的一批 reward sequences<br><code>label = 0</code></div>
+          <div class="arrow">→</div>
+          <div class="flow-box"><strong>Binary MLP</strong>判断 reward sequence 来自旧窗口还是新窗口</div>
+          <div class="arrow">→</div>
+          <div class="flow-box"><strong>Test Window</strong>最近的一批 reward sequences<br><code>label = 1</code></div>
+        </div>
+
+        <div class="grid-2">
+          <div class="panel green">
+            <h3>分类器分不清</h3>
+            <p>两个窗口的 reward distribution 接近。</p>
+            <p><code>S</code> 较低，环境较稳定。</p>
+          </div>
+          <div class="panel red">
+            <h3>分类器很容易分清</h3>
+            <p>两个窗口的 reward distribution 明显不同。</p>
+            <p><code>S</code> 较高，可能发生 dynamics shift。</p>
+          </div>
+        </div>
+
+        <div class="formula">S = Jensen-Shannon divergence(reference, test)
+S ≥ threshold → 标记 change point</div>
+
+        <div class="speaker"><strong>讲述提示：</strong>这里的 S 既是 change detector，也是后面 TD-error 和 DoE 之间的动态 gate。</div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="topbar"><h1>3 / 第二步：定义 Environment Discrepancy</h1></div>
+      <div class="content">
+        <p class="subtitle">DEER 想估计：同一个 state-action 的价值变化，有多少来自环境本身变化。</p>
+
+        <div class="formula">DoE(s, a) = Q_new(s, a) - Q_old(s, a)</div>
+
+        <div class="grid-2">
+          <div class="panel green">
+            <h3>低 |DoE|</h3>
+            <p><code>Q_old(s,a) = 10</code></p>
+            <p><code>Q_new(s,a) = 9.8</code></p>
+            <p>环境虽然变了，但这条经验对应的价值关系基本没变，旧 transition 仍可能有用。</p>
+          </div>
+          <div class="panel red">
+            <h3>高 |DoE|</h3>
+            <p><code>Q_old(s,a) = 10</code></p>
+            <p><code>Q_new(s,a) = -3</code></p>
+            <p>同一动作在新环境中的价值完全改变，旧 transition 很可能已经过时。</p>
+          </div>
+        </div>
+
+        <table>
+          <thead><tr><th>信号</th><th>想回答的问题</th><th>高值的直觉</th></tr></thead>
+          <tbody>
+            <tr><td>TD-error</td><td>agent 对当前 Bellman target 预测错多少？</td><td>agent 还需要继续学习这条经验</td></tr>
+            <tr><td>DoE</td><td>环境变化让 state-action value 改变多少？</td><td>这条经验对 dynamics shift 很敏感</td></tr>
+          </tbody>
+        </table>
+
+        <div class="speaker"><strong>讲述提示：</strong>强调 DoE 是概念上的分离，不是完美识别。Q_old 和 Q_new 都可能估计错误。</div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="topbar"><h1>4 / 第三步：旧经验和新经验分开处理</h1></div>
+      <div class="content">
+        <div class="grid-2">
+          <div class="panel blue">
+            <h3>Change 之前的旧 transition</h3>
+            <div class="formula">priority_old = 2σ(-|DoE|)</div>
+            <ul>
+              <li>低 DoE：旧经验跨环境仍然成立，优先保留。</li>
+              <li>高 DoE：旧经验受环境变化影响大，降低 priority。</li>
+              <li>不是全部遗忘，而是 selective reuse。</li>
+            </ul>
+          </div>
+
+          <div class="panel orange">
+            <h3>Change 之后的新 transition</h3>
+            <div class="formula">priority_new =
+(1-S) × normalized TD
++ S × normalized |DoE|</div>
+            <ul>
+              <li><code>S</code> 高：环境刚变化，优先适应新 dynamics。</li>
+              <li><code>S</code> 低：环境稳定，重新偏重 TD-error。</li>
+              <li>从 environment adaptation 自动切回 policy refinement。</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="callout">DEER 最关键的设计不是 DoE 本身，而是：<strong>旧数据和新数据使用不同 priority，并且新数据的 priority 会随变化阶段动态调整。</strong></div>
+        <div class="speaker"><strong>讲述提示：</strong>对比我们的固定 quota：我们目前按 same-regime / high-TD / recent / random 固定混合，DEER 的权重会随变化分数 S 自动改变。</div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="topbar"><h1>5 / DEER 在时间轴上如何工作</h1></div>
+      <div class="content">
+        <div class="timeline">
+          <div class="stage blue">
+            <strong>Stage A：变化之前</strong>
+            <p>环境稳定，正常利用 replay。</p>
+            <p>旧经验大多仍符合当前 dynamics。</p>
+            <span class="tag tag-blue">normal learning</span>
+          </div>
+          <div class="stage red">
+            <strong>Stage B：刚发生变化</strong>
+            <p>reward-window discrepancy 上升，检测到 change point。</p>
+            <p>重点采样能反映新 dynamics 的 post-change transition。</p>
+            <span class="tag tag-red">rapid adaptation</span>
+          </div>
+          <div class="stage green">
+            <strong>Stage C：逐渐稳定</strong>
+            <p>变化分数 S 下降，priority 逐渐回到 TD-error。</p>
+            <p>选择性复用低 DoE 的旧经验，维持稳定和长期记忆。</p>
+            <span class="tag tag-green">selective reuse</span>
+          </div>
+        </div>
+
+        <div class="flow">
+          <div class="flow-box"><strong>先学新规则</strong>增加 post-change priority</div>
+          <div class="arrow">→</div>
+          <div class="flow-box"><strong>确认哪些旧知识失效</strong>利用 DoE 过滤旧 transition</div>
+          <div class="arrow">→</div>
+          <div class="flow-box"><strong>恢复正常学习</strong>重新强调 TD-error 与长期记忆</div>
+        </div>
+
+        <div class="speaker"><strong>白话类比：</strong>换到新公司后，第一周先集中学新流程；熟悉以后，再把上一份工作里仍通用的技能拿回来，而不是把旧知识全部删除。</div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="topbar"><h1>6 / 完整训练循环</h1></div>
+      <div class="content">
+        <table>
+          <thead><tr><th>Step</th><th>DEER 做什么</th><th>直觉</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>agent 与环境交互，将 transition 放入 replay buffer</td><td>正常收集经验</td></tr>
+            <tr><td>2</td><td>维护 reference 和 test reward windows</td><td>观察最近环境是否和过去不同</td></tr>
+            <tr><td>3</td><td>训练 binary MLP，计算 JS discrepancy score S</td><td>判断是否发生 shift</td></tr>
+            <tr><td>4</td><td>超过 threshold 后标记 change point，并保留旧 Q-function 信息</td><td>区分 change 前后的 transition</td></tr>
+            <tr><td>5</td><td>比较 Q_new 与 Q_old，计算 DoE</td><td>判断经验受 dynamics 改变的程度</td></tr>
+            <tr><td>6</td><td>旧 transition 按低 DoE 优先</td><td>保留跨环境可迁移经验</td></tr>
+            <tr><td>7</td><td>新 transition 按 S 动态混合 DoE 和 TD-error</td><td>在 adaptation 与 policy learning 间切换</td></tr>
+            <tr><td>8</td><td>按 priority 抽样并使用 importance weight 更新 SAC</td><td>纠正非均匀采样偏差</td></tr>
+            <tr><td>9</td><td>持续更新 Q、TD-error、DoE 和 priority</td><td>让采样策略随训练阶段变化</td></tr>
+          </tbody>
+        </table>
+
+        <div class="formula">P(i) = priority_i^α / Σ priority^α
+w_i ∝ (N × P(i))^(-β)</div>
+
+        <p class="small">论文实验使用 α = 0.6、β = 0.4。这里和 PER 一样，通过 importance sampling weight 减少 prioritized sampling 带来的估计偏差。</p>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="topbar"><h1>7 / Method 的关键假设与风险</h1></div>
+      <div class="content">
+        <div class="grid-2">
+          <div>
+            <h2>DEER 默认依赖什么</h2>
+            <ul>
+              <li>reward distribution 的变化能够提示 environment shift。</li>
+              <li>change point 能通过固定窗口和 threshold 被检测。</li>
+              <li>Q_old 与 Q_new 足够可靠，可以用来计算 DoE。</li>
+              <li>新旧环境存在可比较、可复用的 state-action structure。</li>
+            </ul>
+          </div>
+          <div>
+            <h2>放到金融里会遇到什么</h2>
+            <ul>
+              <li>reward 变化可能来自市场、policy、仓位、成本或随机噪声。</li>
+              <li>regime 往往渐进、反复，没有干净 change point。</li>
+              <li>废 policy 会产生不可靠的 Q，DoE 可能只是两个错误估计的差。</li>
+              <li>金融相关性需要通过 out-of-sample 风险和收益证明。</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="callout">所以 DEER 提供的是一个很强的 replay 设计思想，但不是可以不加验证地直接搬到金融市场的答案。</div>
+        <div class="speaker"><strong>讲述提示：</strong>这页是连接到我们项目的桥梁：我们的 explicit regime label 更可解释，但 DEER 的动态 priority 更有方法深度。</div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="topbar"><h1>8 / 如何把 DEER 移植到金融环境</h1></div>
+      <div class="content">
+        <table>
+          <thead><tr><th>Step</th><th>金融环境中的实现</th><th>必须注意</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><strong>1. 定义金融 MDP</strong></td>
+              <td>固定 state、action、reward 和 transaction cost。先沿用当前 DQN 环境，确保 Uniform/PER 能稳定运行。</td>
+              <td>先检查 portfolio accounting、cash、drawdown、reward scale；废 policy 会让后续 DoE 失去意义。</td>
+            </tr>
+            <tr>
+              <td><strong>2. 构造 change detector</strong></td>
+              <td>使用相邻 reward windows 训练 binary MLP，计算 JS score <code>S</code>；同时保留 rule/HMM/CUSUM label 作为外部验证。</td>
+              <td>金融 reward 噪声大，变化可能来自仓位、policy 和成本，不一定来自 market dynamics。所有窗口只能使用当时及过去数据。</td>
+            </tr>
+            <tr>
+              <td><strong>3. 保存 Q snapshot</strong></td>
+              <td>检测到 change point 时冻结一份 <code>Q_old</code>，当前网络继续学习为 <code>Q_new</code>，在 buffer transition 上计算 <code>|Q_new-Q_old|</code>。</td>
+              <td>Q 网络必须在 change 前已有基本学习能力；否则 DoE 只是两个不可靠 Q 估计的差。还要固定 normalization 和 action definition。</td>
+            </tr>
+            <tr>
+              <td><strong>4. 接入 DEER priority</strong></td>
+              <td>change 前 transition 按低 DoE 优先；change 后 transition 用 <code>S</code> 动态混合 DoE 与 TD-error，再使用 PER 式 sampling 和 importance weights。</td>
+              <td>保留随机样本和 priority floor，避免只抽少数 transition；记录 pre/post-change sampling share 和 effective sample diversity。</td>
+            </tr>
+            <tr>
+              <td><strong>5. 做公平实验</strong></td>
+              <td>同一 DQN、数据、seed、buffer 和交易成本下比较 Uniform、PER、当前 Regime-aware、DEER-like，以及可选 Hybrid。</td>
+              <td>严格 chronological train/validation/test；不要用未来 regime label；除收益外报告 recovery、drawdown、turnover、mismatch 和 detector false alarms。</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>建议分两级移植</h3>
+        <div class="grid-2">
+          <div class="panel blue">
+            <h3>Level 1：DEER-like MVP</h3>
+            <p>先用已有 regime switch 作为 change point，重点验证 Q snapshot、DoE priority 和动态 sampling 是否能运行。</p>
+            <p>目的：分离“priority 设计问题”和“change detector 问题”。</p>
+          </div>
+          <div class="panel green">
+            <h3>Level 2：Faithful DEER</h3>
+            <p>再加入 reward-window MLP detector，让模型自己发现 shift，并与 rule/HMM/CUSUM 检测结果对照。</p>
+            <p>目的：检验通用 DEER detector 在高噪声金融环境中是否可靠。</p>
+          </div>
+        </div>
+
+        <div class="callout"><strong>最关键的实验原则：</strong>先证明 DQN 与 Q-value 基本可信，再测试 DoE；先用已知 change point 验证 sampling，再加入 learned detector。不要同时更换环境、detector、priority 和 RL algorithm。</div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="topbar"><h1>9 / 两分钟总结话术</h1></div>
+      <div class="content">
+        <div class="callout">
+          DEER 认为，在非平稳环境里，TD-error 大不一定表示经验有价值，也可能只是环境已经变化。它先比较相邻 reward windows，用二分类器和 JS divergence 检测 dynamics shift；再通过新旧 Q-function 的差定义 DoE，估计每条 transition 受环境变化影响的程度。对于 change 前的旧经验，低 DoE 的被保留；对于 change 后的新经验，环境刚变化时重点看 DoE，环境稳定后逐渐重新看 TD-error。这样 agent 先快速适应新环境，再选择性复用仍然有效的旧经验。
+        </div>
+
+        <div class="callout">
+          对我们来说，DEER 已经占据了 general non-stationary replay 的位置。我们的区别是用明确的 financial market regime 作为 relevance signal，更简单、更可解释。但现在只证明 mismatch 下降还不够，因为按 same-regime 抽样天然会降低 mismatch。下一步必须证明它改善 post-switch recovery、drawdown、turnover 或 out-of-sample stability，并考虑把固定采样比例改成类似 DEER 的动态机制。
+        </div>
+
+        <h3>讨论时建议问伙伴的三个问题</h3>
+        <ul>
+          <li>我们是否把 DEER-like method 加成必需 baseline？</li>
+          <li>固定 same-regime ratio 是否应该改成 change-aware dynamic ratio？</li>
+          <li>在 Q-function 尚不可靠时，我们先修 DQN，还是先只做 synthetic mechanism validation？</li>
+        </ul>
+
+        <p class="small">Source: Sample Efficient Experience Replay in Non-stationary Environments, arXiv:2509.15032v1.</p>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

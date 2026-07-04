@@ -1,0 +1,807 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DEER 金融环境迁移手册</title>
+  <style>
+    :root {
+      --ink: #17202a;
+      --muted: #5c6673;
+      --paper: #ffffff;
+      --canvas: #edf0f3;
+      --line: #d8dde3;
+      --navy: #16324f;
+      --blue: #2563a6;
+      --cyan: #087f8c;
+      --green: #287a57;
+      --amber: #a15c00;
+      --red: #aa3636;
+      --soft-blue: #eef5fb;
+      --soft-green: #edf8f2;
+      --soft-amber: #fff7e8;
+      --soft-red: #fff0f0;
+      --soft-gray: #f5f6f7;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--canvas);
+      font-family: Arial, "Microsoft YaHei", "PingFang SC", sans-serif;
+      line-height: 1.55;
+    }
+
+    a { color: inherit; }
+
+    .page {
+      width: min(1440px, 100%);
+      margin: 0 auto;
+      background: var(--paper);
+      box-shadow: 0 0 30px rgba(23, 32, 42, .08);
+    }
+
+    .hero {
+      min-height: 540px;
+      display: grid;
+      grid-template-columns: minmax(0, 1.45fr) minmax(320px, .75fr);
+      gap: 54px;
+      align-items: center;
+      padding: 70px 72px;
+      color: #fff;
+      background: var(--navy);
+    }
+
+    .eyebrow {
+      margin: 0 0 14px;
+      color: #9ed7df;
+      font-size: 17px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0 0 24px;
+      font-size: clamp(42px, 5vw, 68px);
+      line-height: 1.08;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    .hero p {
+      max-width: 850px;
+      margin: 0;
+      color: #dce7ef;
+      font-size: 23px;
+    }
+
+    .hero-meta {
+      border-left: 1px solid rgba(255,255,255,.28);
+      padding-left: 34px;
+    }
+
+    .hero-meta div { margin-bottom: 22px; }
+    .hero-meta strong { display: block; color: #9ed7df; font-size: 15px; }
+    .hero-meta span { font-size: 20px; }
+
+    .toc {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      padding: 12px 28px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255,255,255,.96);
+      backdrop-filter: blur(8px);
+    }
+
+    .toc a {
+      flex: 0 0 auto;
+      padding: 7px 11px;
+      border-radius: 5px;
+      color: var(--muted);
+      font-size: 14px;
+      text-decoration: none;
+    }
+
+    .toc a:hover { color: #fff; background: var(--blue); }
+
+    section {
+      padding: 58px 68px;
+      border-bottom: 1px solid var(--line);
+      scroll-margin-top: 58px;
+    }
+
+    section:nth-of-type(even) { background: #fbfcfd; }
+
+    .section-head {
+      display: grid;
+      grid-template-columns: 70px minmax(0, 1fr);
+      gap: 18px;
+      align-items: start;
+      margin-bottom: 34px;
+    }
+
+    .num {
+      color: var(--blue);
+      font-size: 22px;
+      font-weight: 700;
+      border-top: 4px solid var(--blue);
+      padding-top: 8px;
+    }
+
+    h2 {
+      margin: 0 0 8px;
+      font-size: 34px;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+
+    .lead { margin: 0; color: var(--muted); font-size: 20px; }
+
+    h3 {
+      margin: 0 0 14px;
+      font-size: 23px;
+      line-height: 1.3;
+    }
+
+    p { margin: 0 0 14px; font-size: 18px; }
+    strong { font-weight: 700; }
+
+    ul, ol { margin: 0; padding-left: 24px; }
+    li { margin: 8px 0; font-size: 18px; }
+
+    code {
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: #e9edf1;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: .92em;
+    }
+
+    .grid-2, .grid-3, .grid-4 {
+      display: grid;
+      gap: 20px;
+      align-items: stretch;
+    }
+
+    .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+    .card {
+      padding: 23px 24px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+    }
+
+    .card.blue { border-top: 5px solid var(--blue); }
+    .card.green { border-top: 5px solid var(--green); }
+    .card.amber { border-top: 5px solid var(--amber); }
+    .card.red { border-top: 5px solid var(--red); }
+    .card p, .card li { font-size: 17px; }
+
+    .callout {
+      margin: 24px 0;
+      padding: 19px 22px;
+      border-left: 6px solid var(--cyan);
+      background: #edf8fa;
+      font-size: 19px;
+    }
+
+    .warning { border-left-color: var(--amber); background: var(--soft-amber); }
+    .danger { border-left-color: var(--red); background: var(--soft-red); }
+    .success { border-left-color: var(--green); background: var(--soft-green); }
+
+    .formula {
+      margin: 18px 0;
+      padding: 19px 22px;
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--soft-gray);
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 19px;
+      line-height: 1.65;
+      text-align: center;
+      white-space: nowrap;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 12px;
+      margin: 26px 0;
+    }
+
+    .flow-step {
+      position: relative;
+      min-height: 150px;
+      padding: 20px 18px;
+      border: 1px solid var(--line);
+      border-top: 5px solid var(--blue);
+      border-radius: 7px;
+      background: #fff;
+    }
+
+    .flow-step:not(:last-child)::after {
+      content: "›";
+      position: absolute;
+      top: 48px;
+      right: -13px;
+      z-index: 2;
+      width: 25px;
+      color: var(--blue);
+      background: #fff;
+      font-size: 34px;
+      font-weight: 700;
+      text-align: center;
+    }
+
+    .flow-step b { display: block; margin-bottom: 8px; color: var(--blue); font-size: 18px; }
+    .flow-step span { color: var(--muted); font-size: 16px; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 20px 0;
+      background: #fff;
+      font-size: 16px;
+    }
+
+    th, td {
+      padding: 13px 14px;
+      border: 1px solid var(--line);
+      vertical-align: top;
+      text-align: left;
+    }
+
+    th { color: #fff; background: var(--navy); font-weight: 700; }
+    tr:nth-child(even) td { background: #f7f9fa; }
+
+    pre {
+      margin: 20px 0;
+      padding: 24px;
+      overflow-x: auto;
+      border-radius: 7px;
+      color: #e9f1f6;
+      background: #172b3d;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 15px;
+      line-height: 1.6;
+    }
+
+    .tag {
+      display: inline-block;
+      margin: 0 5px 5px 0;
+      padding: 4px 8px;
+      border: 1px solid #a9c5db;
+      border-radius: 4px;
+      color: var(--navy);
+      background: var(--soft-blue);
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .checklist { list-style: none; padding: 0; }
+    .checklist li { position: relative; padding-left: 30px; }
+    .checklist li::before {
+      content: "□";
+      position: absolute;
+      left: 0;
+      top: -1px;
+      color: var(--blue);
+      font-size: 22px;
+      font-weight: 700;
+    }
+
+    .footer {
+      padding: 32px 68px;
+      color: #dce7ef;
+      background: var(--navy);
+      font-size: 15px;
+    }
+
+    @media (max-width: 900px) {
+      .hero { grid-template-columns: 1fr; padding: 52px 28px; }
+      .hero-meta { border-left: 0; border-top: 1px solid rgba(255,255,255,.28); padding: 25px 0 0; }
+      section { min-width: 0; padding: 44px 25px; overflow: hidden; }
+      .section-head { grid-template-columns: 48px minmax(0, 1fr); }
+      .grid-2, .grid-3, .grid-4, .flow { grid-template-columns: 1fr; }
+      .flow-step:not(:last-child)::after { display: none; }
+      h2 { font-size: 29px; }
+      .formula {
+        max-width: 100%;
+        overflow-wrap: anywhere;
+        text-align: left;
+        white-space: normal;
+      }
+      table {
+        display: block;
+        max-width: 100%;
+        overflow-x: auto;
+        white-space: normal;
+      }
+      pre {
+        max-width: 100%;
+        overflow-wrap: anywhere;
+        white-space: pre-wrap;
+      }
+    }
+
+    @media print {
+      body { background: #fff; }
+      .page { width: 100%; box-shadow: none; }
+      .toc { display: none; }
+      .hero { min-height: 0; page-break-after: always; }
+      section { break-inside: avoid-page; }
+      a { text-decoration: none; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">Implementation and Research Playbook</p>
+        <h1>DEER 金融环境迁移手册</h1>
+        <p>把 Discrepancy of Environment Prioritized Experience Replay 从 MuJoCo 连续控制迁移到金融 DQN 环境，并形成可复现、可消融、可写进论文的方法。</p>
+      </div>
+      <div class="hero-meta">
+        <div><strong>项目基线</strong><span>DQN / PER / Regime-Aware Replay</span></div>
+        <div><strong>推荐 MVP</strong><span>Existing Regime Boundary + Normalized DoE</span></div>
+        <div><strong>首要目标</strong><span>稳定性和 regime-shift adaptation，而非单次最高收益</span></div>
+        <div><strong>版本</strong><span>2026-06-22</span></div>
+      </div>
+    </header>
+
+    <nav class="toc" aria-label="目录">
+      <a href="#decision">结论</a>
+      <a href="#mapping">迁移映射</a>
+      <a href="#contract">环境契约</a>
+      <a href="#detector">变化检测</a>
+      <a href="#doe">DoE</a>
+      <a href="#priority">Priority</a>
+      <a href="#buffer">Buffer</a>
+      <a href="#algorithm">算法</a>
+      <a href="#parameters">参数</a>
+      <a href="#experiments">实验</a>
+      <a href="#diagnostics">诊断</a>
+      <a href="#delivery">交付</a>
+    </nav>
+
+    <section id="decision">
+      <div class="section-head">
+        <div class="num">01</div>
+        <div><h2>先做哪一个版本</h2><p class="lead">不要同时复现 detector、DoE、SAC 和金融环境。第一版只验证核心因果链。</p></div>
+      </div>
+      <div class="grid-2">
+        <article class="card green">
+          <h3>推荐：Project MVP</h3>
+          <ul>
+            <li>保留当前统一的 DQN 环境、reward 和网络。</li>
+            <li>直接读取现有三种 regime labeler 给出的 change points。</li>
+            <li>在 boundary 保存旧 Q snapshot，计算 normalized DoE。</li>
+            <li>只替换 replay priority，比较 Uniform、PER、Regime Replay、DEER。</li>
+          </ul>
+        </article>
+        <article class="card blue">
+          <h3>第二步：Paper-faithful DEER</h3>
+          <ul>
+            <li>使用相邻 reward-sequence windows。</li>
+            <li>训练二分类器并计算 density-ratio / JS score。</li>
+            <li>由检测分数在 TD-error 和 DoE 之间动态混合。</li>
+            <li>比较外部 regime detector 与 DEER 内生 detector。</li>
+          </ul>
+        </article>
+      </div>
+      <div class="callout success"><strong>论文叙事：</strong>先问“DoE priority 在金融 non-stationarity 下是否有效”，再问“何种 regime detector 最适合触发 DoE”。两步分开，结果才可解释。</div>
+    </section>
+
+    <section id="mapping">
+      <div class="section-head">
+        <div class="num">02</div>
+        <div><h2>从原论文到金融环境的映射</h2><p class="lead">DEER 的结构可以保留，但每个量的尺度、时间含义和可观测性都发生了变化。</p></div>
+      </div>
+      <table>
+        <thead><tr><th>DEER 原设定</th><th>金融迁移</th><th>主要风险</th><th>建议</th></tr></thead>
+        <tbody>
+          <tr><td>摩擦力、阻尼突变</td><td>收益、波动率、相关性、流动性 regime shift</td><td>变化渐进且带噪声</td><td>允许 detector delay，按 detected boundary 评估</td></tr>
+          <tr><td>连续动作 SAC</td><td>离散目标仓位 DQN</td><td>Q-value 高估和动作塌缩</td><td>Double DQN + target position action</td></tr>
+          <tr><td>高幅度环境 reward</td><td>日收益通常在 ±1% 附近</td><td>sigmoid priority 几乎全部相同</td><td>对 TD 和 DoE 做 robust normalization</td></tr>
+          <tr><td>一次明显 change point</td><td>多次 recurring regimes</td><td>旧经验并非统一过时</td><td>保存 regime_id，并记录跨 regime relevance</td></tr>
+          <tr><td>reward sequence detector</td><td>净收益、波动和市场指标</td><td>策略变化也会改变 reward</td><td>MVP 使用外部 regime labels；detector 做独立消融</td></tr>
+          <tr><td>DoE = 新旧 Q 差</td><td>critic snapshot 的估值变化</td><td>混入 policy update 和 approximation error</td><td>短暂 critic-only calibration 或明确称 empirical DoE</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="contract">
+      <div class="section-head">
+        <div class="num">03</div>
+        <div><h2>先冻结金融环境契约</h2><p class="lead">DEER 只能改变 replay；如果同时改 reward、action 或特征，无法归因。</p></div>
+      </div>
+      <div class="grid-3">
+        <article class="card blue"><h3>State</h3><ul><li>仅使用当时可得的 rolling features。</li><li>必须包含当前持仓或目标仓位。</li><li>normalizer 只在训练历史上拟合。</li><li>所有方法使用完全相同的输入。</li></ul></article>
+        <article class="card green"><h3>Action</h3><ul><li>推荐目标仓位，而非重复 buy/sell 命令。</li><li>最简：short / flat / long。</li><li>明确仓位上限、换仓时点和执行价格。</li><li>禁止不同 replay 方法使用不同 action mask。</li></ul></article>
+        <article class="card amber"><h3>Reward</h3><ul><li>推荐 net log return。</li><li>交易成本直接进入 portfolio value。</li><li>第一轮不加入 Sharpe、MDD 等复杂项。</li><li>记录 raw reward 与 training-scaled reward。</li></ul></article>
+      </div>
+      <div class="formula">r_t = log(V_{t+1} / V_t), &nbsp;&nbsp; V_{t+1} includes transaction cost</div>
+      <div class="callout warning"><strong>最低要求：</strong>Uniform Replay 必须先能在多个 seed 下学出非随机、非全持有策略。否则 DEER 只是在重新排列噪声。</div>
+    </section>
+
+    <section id="detector">
+      <div class="section-head">
+        <div class="num">04</div>
+        <div><h2>Regime change 如何触发</h2><p class="lead">项目 MVP 和论文忠实版应当作为两个独立实验，不要混成一个黑盒。</p></div>
+      </div>
+      <div class="grid-2">
+        <article class="card green">
+          <h3>A. 现有 labeler 触发</h3>
+          <p><span class="tag">MVP</span><span class="tag">低风险</span></p>
+          <ol>
+            <li>label 从 (z_{t-1}) 变为 (z_t) 时触发 boundary。</li>
+            <li>保存 `q_reference` snapshot。</li>
+            <li>为 transition 保存 <code>boundary_id</code>；采样时再动态判断 current / old。</li>
+            <li>用 detector 的实际发布日期，禁止使用平滑后的未来标签。</li>
+            <li>MVP 只要求输入 <code>date, regime_label</code>；label 必须在决策时刻可获得。</li>
+          </ol>
+        </article>
+        <article class="card blue">
+          <h3>B. DEER reward-window detector</h3>
+          <p><span class="tag">Faithful</span><span class="tag">独立消融</span></p>
+          <p>两个固定长度但持续滑动的相邻窗口：</p>
+          <div class="formula">reference: [t-2m+1, t-m] &nbsp; | &nbsp; test: [t-m+1, t]</div>
+          <p>分类器区分两组 reward sequences；density-ratio score (S) 超过阈值时，在约 (t-m) 处报告变化。</p>
+        </article>
+      </div>
+      <div class="callout danger"><strong>金融特别风险：</strong>agent reward 同时受市场和当前策略影响。若策略刚好开始频繁换仓，reward distribution 会变化，分类器可能把“策略变了”误判为“市场变了”。建议额外比较 market-return 或 volatility sequence detector。</div>
+    </section>
+
+    <section id="doe">
+      <div class="section-head">
+        <div class="num">05</div>
+        <div><h2>如何计算金融 DoE</h2><p class="lead">同一条 transition 是“测试题”；变化前后的两个 Q estimator 分别回答。</p></div>
+      </div>
+      <div class="flow">
+        <div class="flow-step"><b>1. Detect</b><span>发现 boundary (T_i)</span></div>
+        <div class="flow-step"><b>2. Snapshot</b><span>冻结变化前 critic 为 (Q_{old})</span></div>
+        <div class="flow-step"><b>3. Adapt</b><span>用新 regime 数据更新当前 critic</span></div>
+        <div class="flow-step"><b>4. Probe</b><span>同一 ((s_k,a_k)) 输入两个 critic</span></div>
+        <div class="flow-step"><b>5. Normalize</b><span>得到可比较的 normalized DoE</span></div>
+      </div>
+      <div class="formula">DoE_k = | Q_current(s_k, a_k) - Q_reference(s_k, a_k) |</div>
+      <div class="grid-2">
+        <article class="card blue">
+          <h3>DQN 推荐实现</h3>
+          <ul>
+            <li>boundary 时复制一张冻结的 Q 网络。</li>
+            <li>对离散动作直接 gather transition 中实际执行的 (a_k)。</li>
+            <li>`q_reference` 不参与 optimizer，也不做 target update。</li>
+            <li>每次被采样时 lazy refresh DoE，避免全 buffer 每步重算。</li>
+          </ul>
+        </article>
+        <article class="card amber">
+          <h3>必须写进 limitation</h3>
+          <ul>
+            <li>理论 DoE 要求相同 policy，实际 DQN policy 会随 critic 改变。</li>
+            <li>旧 state 在新 regime 下可能是 OOD。</li>
+            <li>Q 差还包含函数逼近误差和随机优化噪声。</li>
+            <li>因此第一版应称 empirical Q-discrepancy。</li>
+          </ul>
+        </article>
+      </div>
+      <h3 style="margin-top:28px">金融尺度修正</h3>
+      <div class="formula">MAD(d) = median(|d - median(d)|)<br>scale_hat = median(d) + 1.4826 × MAD(d) + ε<br>scale_t = ρ × scale_(t-1) + (1-ρ) × scale_hat<br>zDoE_k = clip(DoE_k / scale_t, 0, z_max)</div>
+      <p>这里使用 <strong>scale-only robust normalization</strong>，不减去 median，因此保留 <code>DoE = 0 → zDoE = 0</code>，并保证 priority 随 DoE 单调变化。常数 <code>1.4826 = 1 / Φ⁻¹(0.75)</code>，作用是让正态分布下的 MAD 具有近似标准差的尺度；它不是需要调节的超参数。</p>
+      <div class="callout"><strong>跨 minibatch 保持尺度：</strong>不要用当前 minibatch 自己计算 scale。每隔 <code>K_scale</code> 次 gradient update，从 replay buffer <strong>均匀、无放回</strong>抽取独立 probe set，计算 <code>scale_hat</code>，再用 EMA 更新全局 <code>scale_DoE</code>。两个 refresh 之间所有 minibatch 共用同一个 scale。默认 <code>K_scale=5</code>，因为按日频每步只更新一次时，500 updates 会晚于整个 S 衰减窗口。</div>
+      <ul>
+        <li>首次初始化：用第一个有效 probe set 直接赋值；若 <code>scale_hat</code> 近似 0，则跳过本次更新。</li>
+        <li>新 boundary：已有 <code>scale_DoE</code> 不清零；第一次 boundary 尚无尺度时，在 critic 首次更新且 DoE 非零后强制做一次 probe refresh，不必等满 <code>K_scale</code>。</li>
+        <li>为 <code>|TD|</code> 维护独立的 <code>scale_TD</code>，不要与 DoE 共用尺度。</li>
+        <li>默认 <code>z_max=5</code>；sigmoid 在约 0–4 最有区分度，超过 5 后接近饱和。</li>
+      </ul>
+    </section>
+
+    <section id="priority">
+      <div class="section-head">
+        <div class="num">06</div>
+        <div><h2>Priority 规则</h2><p class="lead">旧经验强调“仍然适用”，新经验在“学习误差”和“环境差异”之间切换。</p></div>
+      </div>
+      <div class="grid-2">
+        <article class="card green">
+          <h3>Pre-change transitions</h3>
+          <div class="formula">p_old(k) = 2σ(-λ · zDoE_k) + ε</div>
+          <p>DoE 小：旧经验在新环境中价值没有明显改变，优先保留。DoE 大：经验可能已过时，降低采样概率。</p>
+        </article>
+        <article class="card blue">
+          <h3>Post-change transitions</h3>
+          <div class="formula">p_new(k) = (1-S)[2σ(zTD_k)-1] + S[2σ(λzDoE_k)-1] + ε</div>
+          <p><code>S</code> 高时强调环境差异；<code>S</code> 低时回到 TD-error refinement。原文中的 change score 在触发检测时已经达到 threshold，并非从 0 开始。MVP 用 external label 确认变化，因此在 boundary 直接给较高的 <code>S0</code>，再按新 transition 数量衰减。</p>
+          <div class="formula">age_new = max(n_new - 1, 0)<br>S(n_new) = S0 × 2^(-age_new / H)<br>if S &lt; S_floor: S = 0</div>
+          <p><code>n_new</code> 是当前 boundary 后收集的<strong>不同 transition 数量</strong>；同一 transition 被 replay 多次不能重复计数。减去 1 是为了让第一条新 transition 确实使用完整的 <code>S0</code>。每次 external label 改变时重置 <code>n_new=0</code>。默认 <code>S0=0.8</code>、<code>H=5</code>、<code>S_floor=0.05</code>。</p>
+          <p>默认轨迹：<code>n_new = 1 / 6 / 11 / 16 / 21</code> 时，<code>S = 0.80 / 0.40 / 0.20 / 0.10 / 0.05</code>；之后置 0。</p>
+        </article>
+      </div>
+      <div class="callout success"><strong>S 的预期轨迹：</strong><code>n_new=1/6/11/16/21</code> 时，<code>S≈0.80/0.40/0.20/0.10/0.05</code>。这模拟原文“检测时已经较高，随后逐渐回到 PER”的行为。</div>
+      <div class="formula">P(k) = p_k^α / Σ_j p_j^α &nbsp;&nbsp;&nbsp; w_k = (N·P(k))^-β / max_j(w_j)</div>
+      <table>
+        <thead><tr><th>量</th><th>作用</th><th>起始值</th><th>注意</th></tr></thead>
+        <tbody>
+          <tr><td>(α)</td><td>priority 对 sampling 的影响强度</td><td>0.6</td><td>必须包含 α=0 的 Uniform 消融</td></tr>
+          <tr><td>(β)</td><td>importance-sampling bias correction</td><td>0.4 → 1.0</td><td>随训练进度 anneal</td></tr>
+          <tr><td>(λ)</td><td>DoE sigmoid 灵敏度</td><td>1.0</td><td>只在 normalized DoE 上使用</td></tr>
+          <tr><td>(ε)</td><td>避免 transition 永远不被采样</td><td>1e-6</td><td>所有 priority 都必须为正</td></tr>
+        </tbody>
+      </table>
+      <div class="callout warning"><strong>刚切换时 DoE 可能仍接近 0：</strong>新 transition 插入 buffer 时必须暂时使用当前最大 priority，确保它至少被学习一次；之后再用最新 TD/DoE 刷新。由于 <code>S0=0.8</code> 而不是 1，TD 分支也始终保留 20% 权重。</div>
+    </section>
+
+    <section id="buffer">
+      <div class="section-head">
+        <div class="num">07</div>
+        <div><h2>Replay buffer 数据结构</h2><p class="lead">多存几列元数据，才能复现 priority、诊断 regime bias，并支持后续消融。</p></div>
+      </div>
+      <pre><code>TransitionRecord:
+    state
+    action
+    reward_raw
+    reward_scaled
+    next_state
+    done
+    timestamp
+    regime_id
+    boundary_id
+    td_error
+    q_reference_value
+    q_current_value
+    doe_raw
+    doe_normalized
+    priority
+    last_priority_update_step</code></pre>
+      <p>Replay manager 还需要保存全局状态：<code>current_regime</code>、<code>current_boundary</code>、<code>n_new</code>、<code>S</code>、<code>scale_DoE</code>、<code>scale_TD</code>、<code>last_scale_refresh_step</code>。</p>
+      <div class="callout">不要永久保存 <code>is_post_change</code>：下一次 regime 切换后它会失效。采样时动态计算 <code>is_current = (transition.boundary_id == current_boundary)</code>。</div>
+      <div class="grid-3">
+        <article class="card blue"><h3>插入时</h3><p>新 transition 使用当前最大 priority，避免因尚未计算 TD/DoE 而永远抽不到。</p></article>
+        <article class="card green"><h3>采样时</h3><p>按 sum-tree 或 segment tree 抽样，返回 index 与 IS weight。</p></article>
+        <article class="card amber"><h3>更新后</h3><p>用最新 TD-error 和 DoE 刷新被采样 transition 的 priority，并记录更新时间。</p></article>
+      </div>
+    </section>
+
+    <section id="algorithm">
+      <div class="section-head">
+        <div class="num">08</div>
+        <div><h2>推荐训练算法</h2><p class="lead">下面是适合当前 DQN 项目的可实现版本，而不是对论文伪代码的逐字照搬。</p></div>
+      </div>
+      <pre><code>initialize online_q, target_q, replay_buffer
+q_probe = ema_copy(online_q)  # Use target_q instead only when it updates fast enough.
+q_reference = frozen_copy(q_probe)
+current_regime = None
+current_boundary = 0
+n_new = 0
+S = 0
+scale_doe = None
+scale_td = None
+force_scale_refresh = False
+gradient_update_step = 0
+
+for each market step t:
+    # External label must be known at decision time t; no future smoothing.
+    regime = external_labels[t]
+    changed = current_regime is not None and regime != current_regime
+
+    if changed:
+        current_boundary += 1
+        q_reference = frozen_copy(q_probe)
+        n_new = 0
+        S = S0
+        force_scale_refresh = True
+    current_regime = regime
+
+    state = build_state_without_future_information(t)
+    action = epsilon_greedy_target_position(online_q, state)
+    next_state, reward, done = env.step(action)
+
+    replay_buffer.add(
+        state, action, reward, next_state, done,
+        timestamp=t, regime_id=regime,
+        boundary_id=current_boundary,
+        priority=replay_buffer.max_priority
+    )
+
+    if current_boundary &gt; 0:
+        n_new += 1  # Count unique newly collected transitions, not replays.
+        age_new = max(n_new - 1, 0)  # The first new transition uses full S0.
+        S = S0 * 2 ** (-age_new / H)
+        if S &lt; S_floor:
+            S = 0
+
+    if replay_buffer.ready():
+        batch, indices, is_weights = replay_buffer.sample(alpha)
+
+        q_pred = online_q(batch.state).gather(batch.action)
+        q_target = double_dqn_target(batch, online_q, target_q)
+        td = q_target - q_pred
+
+        with no_grad:
+            q_old = q_reference(batch.state).gather(batch.action)
+            q_new = q_probe(batch.state).gather(batch.action)
+            doe = abs(q_new - q_old)
+            if scale_doe is None or scale_td is None:
+                priority = abs(td) + eps  # PER fallback during initialization.
+            else:
+                z_td = clip(abs(td) / scale_td, 0, z_max)
+                z_doe = clip(doe / scale_doe, 0, z_max)
+                post = batch.boundary_id == current_boundary
+                priority = where(
+                    post,
+                    (1-S) * (2*sigmoid(z_td)-1)
+                        + S * (2*sigmoid(lambda_doe*z_doe)-1) + eps,
+                    2*sigmoid(-lambda_doe*z_doe) + eps,
+                )
+
+        loss = mean(is_weights * huber(td))
+        optimize online_q with gradient clipping
+        ema_update(q_probe, online_q, tau_probe)
+        gradient_update_step += 1
+        replay_buffer.update_priorities(indices, priority)
+        periodically_update(target_q)
+
+    regular_refresh = gradient_update_step &gt; 0 and gradient_update_step % K_scale == 0
+    if replay_buffer.ready() and (regular_refresh or force_scale_refresh):
+        probe_size = min(M_probe, len(replay_buffer))
+        probe = replay_buffer.uniform_sample_without_replacement(probe_size)
+        doe_probe, td_probe = evaluate_without_grad(probe)
+        scale_td = rolling_robust_scale(abs(td_probe), scale_td, rho)
+        if current_boundary &gt; 0 and any(doe_probe &gt; scale_floor):
+            scale_doe = rolling_robust_scale(doe_probe, scale_doe, rho)
+            force_scale_refresh = False
+</code></pre>
+      <pre><code>rolling_robust_scale(values, previous, rho):
+    median_value = median(values)
+    mad = median(abs(values - median_value))
+    candidate = median_value + 1.4826 * mad + eps_scale
+
+    if candidate &lt;= scale_floor:
+        return previous
+    if previous is None:
+        return candidate
+    return rho * previous + (1-rho) * candidate
+</code></pre>
+      <div class="callout"><strong>为什么 DoE 用 target / EMA critic：</strong>online Q 每个 gradient step 都抖动，直接比较会把优化噪声当环境变化。若 target network 在 <code>H</code> 条新 transition 内至少更新一次，可直接使用；否则推荐单独维护每次 critic update 都更新的 EMA probe critic（默认 <code>τ_probe=0.01</code>），并在 boundary 冻结它作为 <code>q_reference</code>。</div>
+      <div class="callout warning"><strong>实现顺序检查：</strong>必须先读取 external label 并处理 boundary，再把当天 transition 入库；否则第一条新-regime transition 会被错误标成旧数据。初始阶段若 <code>scale_DoE/scale_TD</code> 尚未建立，先使用 PER priority，直到第一个有效 probe scale 可用。</div>
+    </section>
+
+    <section id="parameters">
+      <div class="section-head">
+        <div class="num">09</div>
+        <div><h2>参数起点与调参顺序</h2><p class="lead">一次只调一层。优先保证 baseline 稳定，再调 S schedule，最后调 DoE scale 与 sensitivity。</p></div>
+      </div>
+      <table>
+        <thead><tr><th>模块</th><th>建议起点</th><th>最小搜索范围</th><th>选择依据</th></tr></thead>
+        <tbody>
+          <tr><td>DQN</td><td>Double + Dueling, Huber, grad clip 10</td><td>固定，不先搜索</td><td>Uniform baseline 的 seed 稳定性</td></tr>
+          <tr><td>Replay capacity</td><td>覆盖至少 2–4 个 regime</td><td>50k / 100k / 250k</td><td>日频数据量与 regime 长度</td></tr>
+          <tr><td>PER α</td><td>0.6</td><td>0.4 / 0.6 / 0.8</td><td>validation median Sharpe</td></tr>
+          <tr><td>IS β</td><td>0.4 线性到 1.0</td><td>固定</td><td>减少 priority sampling bias</td></tr>
+          <tr><td>S0</td><td>0.8</td><td>0.5 / 0.8 / 1.0</td><td>刚切换时 DoE 初始权重</td></tr>
+          <tr><td>H</td><td>5 个新 transition</td><td>3 / 5 / 10</td><td>S 的半衰期与恢复速度</td></tr>
+          <tr><td>S_floor</td><td>0.05</td><td>固定</td><td>低于后完全退回 PER</td></tr>
+          <tr><td>DoE/TD normalization</td><td>rolling robust scale</td><td>rolling / rank</td><td>z 值分布与 priority entropy</td></tr>
+          <tr><td>K_scale</td><td>5 critic updates</td><td>1 / 5 / 10</td><td>必须明显短于 S 的有效窗口</td></tr>
+          <tr><td>M_probe</td><td>min(2048, buffer size)</td><td>1024 / 2048 / 4096</td><td>probe 统计方差</td></tr>
+          <tr><td>ρ</td><td>0.9</td><td>0.8 / 0.9 / 0.95</td><td>跨 batch scale 平滑程度</td></tr>
+          <tr><td>τ_probe</td><td>0.01</td><td>0.005 / 0.01 / 0.02</td><td>仅当 target 更新慢时使用 EMA probe critic</td></tr>
+          <tr><td>eps_scale / scale_floor</td><td>1e-8 / 1e-8</td><td>固定</td><td>避免除零；无有效差异时保留上次尺度</td></tr>
+          <tr><td>z_max</td><td>5.0</td><td>3 / 5</td><td>避免 sigmoid 饱和</td></tr>
+          <tr><td>λ</td><td>1.0</td><td>0.5 / 1 / 2</td><td>normalized DoE 灵敏度</td></tr>
+        </tbody>
+      </table>
+      <div class="callout success"><strong>MVP 固定配置：</strong><code>S0=0.8, H=5, S_floor=0.05, K_scale=5, M_probe=min(2048,N), ρ=0.9, z_max=5, λ=1</code>。先用这组参数完成 sanity run，再只搜索 <code>S0 × H</code>；scale 参数只在诊断显示明显滞后或抖动时调整。</div>
+      <div class="callout warning"><strong>调参纪律：</strong>所有参数只使用 validation period 和多 seed median 选择，不能根据最终 test return 回调。优先看 priority entropy、zDoE quantiles 和 shift-recovery time，再看收益。</div>
+    </section>
+
+    <section id="experiments">
+      <div class="section-head">
+        <div class="num">10</div>
+        <div><h2>论文级实验矩阵</h2><p class="lead">主实验回答“有没有用”，消融回答“为什么有用”，稳健性回答“是不是偶然”。</p></div>
+      </div>
+      <h3>主比较</h3>
+      <table>
+        <thead><tr><th>ID</th><th>Replay</th><th>Change trigger</th><th>核心问题</th></tr></thead>
+        <tbody>
+          <tr><td>B0</td><td>Uniform</td><td>无</td><td>基础 DQN 是否能学到非随机策略</td></tr>
+          <tr><td>B1</td><td>PER</td><td>无</td><td>普通 TD priority 是否有效</td></tr>
+          <tr><td>B2</td><td>Regime-Aware Replay</td><td>现有 labeler</td><td>显式 regime sampling 是否有效</td></tr>
+          <tr><td>M1</td><td>DEER</td><td>现有 labeler</td><td>DoE priority 的净贡献</td></tr>
+          <tr><td>M2</td><td>DEER</td><td>reward-window classifier</td><td>原论文完整迁移效果</td></tr>
+          <tr><td>M3</td><td>Regime-Aware DEER</td><td>现有 labeler</td><td>regime balance 与 DoE relevance 是否互补</td></tr>
+        </tbody>
+      </table>
+      <h3>必须做的消融</h3>
+      <div class="grid-4">
+        <article class="card blue"><h3>No DoE</h3><p>只使用 TD-error，确认改善不是来自代码重构。</p></article>
+        <article class="card green"><h3>Raw vs Normalized</h3><p>验证金融 Q 尺度修正是否必要。</p></article>
+        <article class="card amber"><h3>Random Boundary</h3><p>确认真实 regime timing 优于随机切分。</p></article>
+        <article class="card red"><h3>No Q Snapshot</h3><p>用固定滞后 snapshot 比较，验证 boundary snapshot 的价值。</p></article>
+      </div>
+      <h3 style="margin-top:28px">报告指标</h3>
+      <p><span class="tag">Return</span><span class="tag">Sharpe</span><span class="tag">Sortino</span><span class="tag">MDD</span><span class="tag">Turnover</span><span class="tag">5–10 Seeds</span><span class="tag">Worst Seed</span><span class="tag">Worst Regime</span><span class="tag">Recovery Time</span><span class="tag">Priority Entropy</span><span class="tag">Action Distribution</span></p>
+      <div class="callout success"><strong>核心新指标：</strong>在每个 detected change point 后，统计策略回到 change 前 rolling performance 水平需要多少 trading days。DEER 的理论价值是更快适应，不应只报告全期累计收益。</div>
+    </section>
+
+    <section id="diagnostics">
+      <div class="section-head">
+        <div class="num">11</div>
+        <div><h2>失败诊断</h2><p class="lead">先看机制是否真的发生，再看收益曲线。收益差可能不是方法错，而是 priority 根本没有区分度。</p></div>
+      </div>
+      <table>
+        <thead><tr><th>症状</th><th>可能原因</th><th>检查</th><th>处理</th></tr></thead>
+        <tbody>
+          <tr><td>所有 priority 接近 1</td><td>scale 过大、未刷新，或 DoE 确实接近 0</td><td>raw DoE、scale_DoE、zDoE quantiles</td><td>确认 probe refresh 在运行；再降低 ρ/K_scale，不能改用 minibatch scale</td></tr>
+          <tr><td>少数样本垄断 replay</td><td>Q 爆炸或 sigmoid 输入过大</td><td>top-1% sampling share</td><td>clip z-score、提高 ε、降低 α/λ</td></tr>
+          <tr><td>change 后性能更差</td><td>S0 太大或 H 太长，新 Q 尚不可靠</td><td>按 n_new 画 S、DoE 与 recovery curve</td><td>先降 S0，再缩短 H；确认新样本以 max priority 入库</td></tr>
+          <tr><td>频繁误报 regime</td><td>reward detector 捕捉到策略换仓</td><td>与市场波动/收益 detector 对齐</td><td>使用外部 market features 或 cooldown</td></tr>
+          <tr><td>DEER 退化成 PER</td><td>external label 未切换、H 太小，或 n_new 被重复累加</td><td>boundary_id、n_new、S 时间序列</td><td>检查 label 对齐；n_new 只在真实入库时加 1；再评估 H</td></tr>
+          <tr><td>策略永远 long/hold</td><td>环境或市场 beta 主导</td><td>action distribution、B&H 对比</td><td>先修环境和 action，不调 replay</td></tr>
+          <tr><td>只有一个 seed 好</td><td>RL 方差或数据挖掘</td><td>seed boxplot、median/worst seed</td><td>固定搜索协议并扩大 seed 数</td></tr>
+        </tbody>
+      </table>
+      <h3>每次 run 必须保存</h3>
+      <ul class="checklist">
+        <li>每步 reward、portfolio value、position、turnover 和 action。</li>
+        <li>Q mean/max、TD-error、raw DoE、normalized DoE。</li>
+        <li>priority quantiles、sampling counts、priority entropy。</li>
+        <li>regime ID、boundary ID、n_new、S，以及每次 external-label change 的时间。</li>
+        <li>每次 probe refresh 的 scale_hat、scale_DoE、scale_TD 和 probe size。</li>
+        <li>完整 config、git commit、seed、数据区间和运行时间。</li>
+      </ul>
+    </section>
+
+    <section id="delivery">
+      <div class="section-head">
+        <div class="num">12</div>
+        <div><h2>两周实现与验收</h2><p class="lead">按依赖关系推进：先建立可信 baseline，再接入 DoE，最后扩展 detector。</p></div>
+      </div>
+      <div class="grid-3">
+        <article class="card blue">
+          <h3>阶段 1：2–3 天</h3>
+          <ul><li>冻结 environment contract。</li><li>稳定 Uniform / PER。</li><li>完成 diagnostics logging。</li><li>5 seeds 小规模 sanity run。</li></ul>
+        </article>
+        <article class="card green">
+          <h3>阶段 2：3–5 天</h3>
+          <ul><li>实现 external-label boundary 与 Q snapshot。</li><li>实现 rolling DoE/TD scale。</li><li>实现 S transition-count schedule。</li><li>接入 priority 并检查 sampling。</li></ul>
+        </article>
+        <article class="card amber">
+          <h3>阶段 3：4–7 天</h3>
+          <ul><li>完整主实验和消融。</li><li>S 与 scale 稳健性。</li><li>transaction cost 与 regime 稳健性。</li><li>生成论文图表和结果表。</li></ul>
+        </article>
+      </div>
+      <h3 style="margin-top:28px">提交代码前的最小测试</h3>
+      <ul class="checklist">
+        <li>external label 不变时不创建新 boundary；变化时只 snapshot 一次并重置 <code>n_new=0, S=S0</code>。</li>
+        <li>第一条新 transition 后 <code>S=0.8</code>；第 6 / 11 / 16 / 21 条后约为 0.4 / 0.2 / 0.1 / 0.05；replay 抽样不改变 <code>n_new</code>。</li>
+        <li><code>q_reference</code> 在同一 boundary 内参数完全不变，<code>q_probe/q_current</code> 每次 critic update 按 EMA 改变。</li>
+        <li>同一 transition 在不同 minibatch 中、两次 scale refresh 之间使用相同的 <code>scale_DoE/scale_TD</code>。</li>
+        <li>probe set 均匀无放回；全零 probe 不覆盖上次有效 scale；buffer 小于 2048 时不会采样越界。</li>
+        <li><code>p_old</code> 随 zDoE 单调下降；<code>S=0</code> 时 <code>p_new</code> 等价于 normalized PER 分支；所有 priority 有限且大于 0。</li>
+        <li>regime label、state 和 reward 在决策时均不含未来数据，训练/验证/测试按时间切分。</li>
+      </ul>
+      <div class="callout success"><strong>MVP 验收标准：</strong>相同 DQN、数据、reward 和训练预算下，DEER 在至少 5 个 seed 中提高 median shift-recovery speed 或降低 worst-regime loss；同时没有通过极端 turnover 获得表面收益。</div>
+      <div class="callout warning"><strong>停止条件：</strong>若 Uniform DQN 仍无法稳定超过 random/cash 或形成有意义的 action distribution，暂停 DEER 大实验，先修环境。Replay 方法不能替代可学习的交易信号。</div>
+    </section>
+
+    <footer class="footer">
+      <strong>DEER Finance Migration Manual</strong><br>
+      本手册中的 normalized DoE、rank-based DoE、critic calibration 和 shift-recovery evaluation 属于金融迁移建议；它们不是原 DEER 论文逐字规定的实现。
+    </footer>
+  </main>
+</body>
+</html>
