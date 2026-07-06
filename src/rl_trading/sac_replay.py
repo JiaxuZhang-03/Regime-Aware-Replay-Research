@@ -641,7 +641,7 @@ class ContinuousDEERReplayBuffer(ContinuousPERBuffer):
         else:
             z_doe = np.clip(doe_abs / max(self.scale_doe, cfg.deer_scale_floor), 0.0, cfg.deer_zmax)
 
-        post = np.array(
+        raw_post = np.array(
             [int(self.storage[int(i)].get("boundary_id", 0)) == int(current_boundary) for i in idx],
             dtype=bool,
         )
@@ -649,7 +649,9 @@ class ContinuousDEERReplayBuffer(ContinuousPERBuffer):
         if int(current_boundary) <= 0 or self.scale_doe is None:
             new_p = td_abs + cfg.per_eps
             source_mode = np.array(["deer_per_fallback"] * len(idx), dtype=object)
+            post = np.zeros(len(idx), dtype=bool)
         else:
+            post = raw_post
             s = float(np.clip(s_score, 0.0, 1.0))
             p_old = 2.0 * sigmoid_np(-float(cfg.deer_lambda) * z_doe) + cfg.per_eps
             p_new = (
@@ -1114,22 +1116,24 @@ def run_single_experiment(cfg: SACExperimentConfig) -> Path:
 
                 if cfg.replay == "deer":
                     assert isinstance(buffer, ContinuousDEERReplayBuffer)
-                    need_scale_refresh = (
-                        buffer.scale_td is None
-                        or (current_boundary > 0 and buffer.scale_doe is None)
-                        or (agent.update_count % max(1, cfg.deer_scale_refresh_freq) == 0)
-                    )
-                    if need_scale_refresh and len(buffer) > 0:
-                        probe = buffer.uniform_probe_batch(cfg.deer_probe_size)
-                        td_probe = agent.compute_td_errors(probe)
-                        doe_probe = agent.compute_q_discrepancy(probe)
-                        buffer.refresh_scales(
-                            td_errors=td_probe,
-                            doe_values=doe_probe,
-                            allow_doe=current_boundary > 0,
+                    if current_boundary > 0:
+                        need_scale_refresh = (
+                            buffer.scale_td is None
+                            or buffer.scale_doe is None
+                            or (agent.update_count % max(1, cfg.deer_scale_refresh_freq) == 0)
                         )
-
-                    doe_values = agent.compute_q_discrepancy(batch)
+                        if need_scale_refresh and len(buffer) > 0:
+                            probe = buffer.uniform_probe_batch(cfg.deer_probe_size)
+                            td_probe = agent.compute_td_errors(probe)
+                            doe_probe = agent.compute_q_discrepancy(probe)
+                            buffer.refresh_scales(
+                                td_errors=td_probe,
+                                doe_values=doe_probe,
+                                allow_doe=True,
+                            )
+                        doe_values = agent.compute_q_discrepancy(batch)
+                    else:
+                        doe_values = np.zeros_like(update["td_errors"], dtype=np.float32)
                     deer_info = buffer.update_deer_priorities(
                         indices=batch["indices"],
                         td_errors=update["td_errors"],

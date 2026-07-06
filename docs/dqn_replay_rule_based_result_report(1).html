@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DQN Replay 实验结果报告 - Rule-based Labels</title>
+<style>
+:root {
+  --bg:#eef2f6; --paper:#ffffff; --ink:#17202a; --muted:#5b6675; --line:#d9e0ea;
+  --soft:#f7f9fc; --green:#0f766e; --blue:#1d4ed8; --amber:#92400e; --red:#991b1b;
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--ink); font-family:"Segoe UI", Arial, "Microsoft YaHei", sans-serif; line-height:1.62; font-size:16px; }
+main { width:min(1180px, calc(100% - 32px)); margin:28px auto; background:var(--paper); border:1px solid var(--line); border-radius:10px; box-shadow:0 14px 42px rgba(31,41,55,.08); overflow:hidden; }
+header { padding:30px 36px; border-bottom:1px solid var(--line); background:linear-gradient(90deg,#f8fafc,#ecfeff); }
+section { padding:26px 36px; border-bottom:1px solid var(--line); }
+section:last-child { border-bottom:0; }
+h1 { margin:0 0 10px; font-size:32px; line-height:1.18; }
+h2 { margin:0 0 14px; font-size:23px; }
+h3 { margin:22px 0 8px; font-size:18px; }
+p { margin:9px 0; }
+ul, ol { margin:8px 0 8px 22px; padding:0; }
+li { margin:5px 0; }
+table { width:100%; border-collapse:collapse; margin:14px 0; font-size:14px; }
+th, td { border:1px solid var(--line); padding:10px 11px; vertical-align:top; text-align:left; }
+th { background:var(--soft); font-weight:700; }
+code, pre { font-family:Consolas, "Courier New", monospace; }
+code { background:#f1f5f9; padding:1px 4px; border-radius:4px; }
+pre { margin:12px 0; padding:14px 16px; background:#111827; color:#e5e7eb; border-radius:6px; overflow-x:auto; font-size:14px; line-height:1.5; }
+.meta, .muted { color:var(--muted); font-size:14px; }
+.callout { margin:14px 0; padding:14px 16px; border-left:4px solid var(--green); background:#ecfdf5; border-radius:6px; }
+.warning { background:#fff7ed; border-left-color:var(--amber); }
+.danger { background:#fef2f2; border-left-color:var(--red); }
+.note { background:#eff6ff; border-left-color:var(--blue); }
+.grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; margin:14px 0; }
+.card { border:1px solid var(--line); border-radius:8px; padding:15px 16px; background:#fbfdff; }
+.kpi-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin:16px 0; }
+.kpi { border:1px solid var(--line); border-radius:10px; padding:14px 16px; background:#fbfdff; }
+.kpi .num { font-size:24px; font-weight:800; margin:6px 0; }
+.kpi .label { color:var(--muted); font-size:13px; }
+.tag { display:inline-block; margin:0 6px 6px 0; padding:2px 8px; border-radius:999px; background:#ccfbf1; color:#115e59; font-size:12px; font-weight:700; }
+.tag.blue { background:#dbeafe; color:#1e40af; }
+.tag.amber { background:#ffedd5; color:#9a3412; }
+.tag.red { background:#fee2e2; color:#991b1b; }
+img { max-width:100%; border:1px solid var(--line); border-radius:8px; margin:10px 0; }
+.chart { width:100%; max-width:820px; background:#ffffff; border:1px solid var(--line); border-radius:8px; margin:12px 0; }
+.chart-title { font:700 16px "Segoe UI", Arial, sans-serif; fill:#17202a; }
+.chart-label { font:13px "Segoe UI", Arial, sans-serif; fill:#17202a; }
+.chart-value { font:12px Consolas, monospace; fill:#17202a; }
+.good { color:var(--green); font-weight:700; }
+.bad { color:var(--red); font-weight:700; }
+@media (max-width:900px) {
+  main { width:calc(100% - 18px); margin:10px auto; }
+  header, section { padding:20px; }
+  .grid, .kpi-grid { grid-template-columns:1fr; }
+  h1 { font-size:25px; }
+  table { font-size:13px; }
+}
+@media print {
+  body { background:#fff; }
+  main { width:100%; margin:0; border:0; box-shadow:none; }
+  section { break-inside:avoid; }
+}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>DQN Replay 实验结果报告</h1>
+  <div class="meta">Label method: <code>rule_based</code> | Methods: <code>online</code>, <code>uniform</code>, <code>per</code>, <code>regime</code> | Seeds: 0, 1, 2</div>
+</header>
+
+<section>
+  <h2>1. 实验设置概述</h2>
+  <p>本次实验使用 <code>rule_based</code> regime labels，对四组 DQN 方法进行对比：</p>
+  <table>
+    <thead>
+      <tr><th>方法</th><th>含义</th><th>主要用途</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>online</code></td><td>DQN-only / no replay</td><td>不使用 replay buffer，只用最新 transition 更新，作为无 replay 基线。</td></tr>
+      <tr><td><code>uniform</code></td><td>DQN + Uniform Replay</td><td>从历史 buffer 中等概率采样，用于观察普通 replay 是否混入大量其他 regime 样本。</td></tr>
+      <tr><td><code>per</code></td><td>DQN + Prioritized Experience Replay</td><td>按 TD-error 优先采样，用于检验 TD-error priority 是否会偏向旧 regime 高误差样本。</td></tr>
+      <tr><td><code>regime</code></td><td>DQN + Regime-aware Replay</td><td>按当前 regime、TD-error、recent、random 的混合规则采样，用于降低 regime mismatch。</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout">
+    <strong>本次结果的核心问题：</strong>普通 replay 与 PER 是否存在明显 regime mismatch；regime-aware replay 是否能降低 mismatch；这些机制变化是否已经转化为更好的交易表现。
+  </div>
+</section>
+
+<section>
+  <h2>2. 汇总结果（三个 seed 的均值 ± 标准差）</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Method</th>
+        <th>Final Value ↑</th>
+        <th>Max Drawdown ↓</th>
+        <th>Mean Turnover ↓</th>
+        <th>Mean Reward ↑</th>
+        <th>Mismatch Rate ↓</th>
+        <th>TD-error</th>
+        <th>Priority</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td><strong>DQN-online / no replay</strong><br><span class='muted'><code>online</code></span></td><td>0.0449 ± 0.0170</td><td>0.9609 ± 0.0148</td><td>1.0593 ± 0.0131</td><td>-0.000699 ± 0.000098</td><td>N/A</td><td>0.0184 ± 0.0034</td><td>N/A</td></tr><tr><td><strong>DQN + Uniform Replay</strong><br><span class='muted'><code>uniform</code></span></td><td>0.0759 ± 0.0225</td><td>0.9357 ± 0.0164</td><td>1.0396 ± 0.0141</td><td>-0.000576 ± 0.000065</td><td>0.5674 ± 0.0005</td><td>0.0097 ± 0.0019</td><td>N/A</td></tr><tr><td><strong>DQN + PER</strong><br><span class='muted'><code>per</code></span></td><td>0.0585 ± 0.0171</td><td>0.9499 ± 0.0173</td><td>1.0461 ± 0.0203</td><td>-0.000634 ± 0.000071</td><td>0.5785 ± 0.0091</td><td>0.0138 ± 0.0028</td><td>0.0302 ± 0.0027</td></tr><tr><td><strong>DQN + Regime-aware Replay</strong><br><span class='muted'><code>regime</code></span></td><td>0.0603 ± 0.0291</td><td>0.9473 ± 0.0272</td><td>1.0501 ± 0.0265</td><td>-0.000638 ± 0.000111</td><td>0.2772 ± 0.0018</td><td>0.0104 ± 0.0017</td><td>0.0282 ± 0.0017</td></tr>
+    </tbody>
+  </table>
+
+  <div class="kpi-grid">
+    <div class="kpi"><div class="label">最佳最终净值</div><div class="num">DQN + Uniform Replay</div><div class="muted">均值 0.0759</div></div>
+    <div class="kpi"><div class="label">最低平均最大回撤</div><div class="num">DQN + Uniform Replay</div><div class="muted">均值 0.9357</div></div>
+    <div class="kpi"><div class="label">最低 mismatch rate</div><div class="num">DQN + Regime-aware Replay</div><div class="muted">均值 0.2772</div></div>
+    <div class="kpi"><div class="label">Regime-aware mismatch 降幅</div><div class="num">51.1%</div><div class="muted">相对 Uniform Replay</div></div>
+  </div>
+</section>
+
+<section>
+  <h2>3. 关键图表</h2>
+  <div class="grid">
+    <div class="card"><svg class='chart' viewBox='0 0 760 250' role='img' aria-label='平均最终净值 Final Portfolio Value（越高越好）'>
+<text x='170' y='24' class='chart-title'>平均最终净值 Final Portfolio Value（越高越好）</text>
+<text x='160' y='60.4' text-anchor='end' class='chart-label'>DQN-online / no replay</text>
+<rect x='170' y='45.0' width='325.1' height='22.0' rx='5' fill='#1d4ed8' opacity='0.86'></rect>
+<text x='503.1' y='60.4' class='chart-value'>0.0449</text>
+<text x='160' y='100.4' text-anchor='end' class='chart-label'>DQN + Uniform Replay</text>
+<rect x='170' y='85.0' width='550.0' height='22.0' rx='5' fill='#1d4ed8' opacity='0.86'></rect>
+<text x='728.0' y='100.4' class='chart-value'>0.0759</text>
+<text x='160' y='140.4' text-anchor='end' class='chart-label'>DQN + PER</text>
+<rect x='170' y='125.0' width='423.9' height='22.0' rx='5' fill='#1d4ed8' opacity='0.86'></rect>
+<text x='601.9' y='140.4' class='chart-value'>0.0585</text>
+<text x='160' y='180.4' text-anchor='end' class='chart-label'>DQN + Regime-aware Replay</text>
+<rect x='170' y='165.0' width='436.7' height='22.0' rx='5' fill='#1d4ed8' opacity='0.86'></rect>
+<text x='614.7' y='180.4' class='chart-value'>0.0603</text>
+</svg></div>
+    <div class="card"><svg class='chart' viewBox='0 0 760 250' role='img' aria-label='平均最大回撤 Max Drawdown（越低越好）'>
+<text x='170' y='24' class='chart-title'>平均最大回撤 Max Drawdown（越低越好）</text>
+<text x='160' y='60.4' text-anchor='end' class='chart-label'>DQN-online / no replay</text>
+<rect x='170' y='45.0' width='550.0' height='22.0' rx='5' fill='#991b1b' opacity='0.86'></rect>
+<text x='728.0' y='60.4' class='chart-value'>0.9609</text>
+<text x='160' y='100.4' text-anchor='end' class='chart-label'>DQN + Uniform Replay</text>
+<rect x='170' y='85.0' width='535.6' height='22.0' rx='5' fill='#991b1b' opacity='0.86'></rect>
+<text x='713.6' y='100.4' class='chart-value'>0.9357</text>
+<text x='160' y='140.4' text-anchor='end' class='chart-label'>DQN + PER</text>
+<rect x='170' y='125.0' width='543.7' height='22.0' rx='5' fill='#991b1b' opacity='0.86'></rect>
+<text x='721.7' y='140.4' class='chart-value'>0.9499</text>
+<text x='160' y='180.4' text-anchor='end' class='chart-label'>DQN + Regime-aware Replay</text>
+<rect x='170' y='165.0' width='542.2' height='22.0' rx='5' fill='#991b1b' opacity='0.86'></rect>
+<text x='720.2' y='180.4' class='chart-value'>0.9473</text>
+</svg></div>
+    <div class="card"><svg class='chart' viewBox='0 0 760 250' role='img' aria-label='平均 Regime Mismatch Rate（online 不适用；越低越好）'>
+<text x='170' y='24' class='chart-title'>平均 Regime Mismatch Rate（online 不适用；越低越好）</text>
+<text x='160' y='65.5' text-anchor='end' class='chart-label'>DQN + Uniform Replay</text>
+<rect x='170' y='45.0' width='539.5' height='29.3' rx='5' fill='#0f766e' opacity='0.86'></rect>
+<text x='717.5' y='65.5' class='chart-value'>0.5674</text>
+<text x='160' y='118.9' text-anchor='end' class='chart-label'>DQN + PER</text>
+<rect x='170' y='98.33333333333334' width='550.0' height='29.3' rx='5' fill='#0f766e' opacity='0.86'></rect>
+<text x='728.0' y='118.9' class='chart-value'>0.5785</text>
+<text x='160' y='172.2' text-anchor='end' class='chart-label'>DQN + Regime-aware Replay</text>
+<rect x='170' y='151.66666666666669' width='263.6' height='29.3' rx='5' fill='#0f766e' opacity='0.86'></rect>
+<text x='441.6' y='172.2' class='chart-value'>0.2772</text>
+</svg></div>
+    <div class="card"><svg class='chart' viewBox='0 0 760 250' role='img' aria-label='平均 TD-error（用于解释 replay 行为）'>
+<text x='170' y='24' class='chart-title'>平均 TD-error（用于解释 replay 行为）</text>
+<text x='160' y='60.4' text-anchor='end' class='chart-label'>DQN-online / no replay</text>
+<rect x='170' y='45.0' width='550.0' height='22.0' rx='5' fill='#92400e' opacity='0.86'></rect>
+<text x='728.0' y='60.4' class='chart-value'>0.0184</text>
+<text x='160' y='100.4' text-anchor='end' class='chart-label'>DQN + Uniform Replay</text>
+<rect x='170' y='85.0' width='291.0' height='22.0' rx='5' fill='#92400e' opacity='0.86'></rect>
+<text x='469.0' y='100.4' class='chart-value'>0.0097</text>
+<text x='160' y='140.4' text-anchor='end' class='chart-label'>DQN + PER</text>
+<rect x='170' y='125.0' width='412.6' height='22.0' rx='5' fill='#92400e' opacity='0.86'></rect>
+<text x='590.6' y='140.4' class='chart-value'>0.0138</text>
+<text x='160' y='180.4' text-anchor='end' class='chart-label'>DQN + Regime-aware Replay</text>
+<rect x='170' y='165.0' width='312.1' height='22.0' rx='5' fill='#92400e' opacity='0.86'></rect>
+<text x='490.1' y='180.4' class='chart-value'>0.0104</text>
+</svg></div>
+  </div>
+</section>
+
+<section>
+  <h2>4. 结果解读</h2>
+
+  <h3>4.1 交易表现：所有方法都还不是有效交易策略</h3>
+  <p>四组方法的最终净值均明显低于 1，平均最大回撤都在 0.93 到 0.96 左右。这说明当前实验主要用于验证 replay 机制，而不是证明 DQN 已经能形成有效交易策略。</p>
+  <ul>
+    <li><strong>DQN + Uniform Replay</strong> 在平均最终净值和平均最大回撤上表现最好：final value ≈ <code>0.0759</code>，max drawdown ≈ <code>0.9357</code>。</li>
+    <li><strong>DQN-online</strong> 无 replay，最终净值最低之一，说明只用最新样本更新的 sample efficiency 较差。</li>
+    <li><strong>DQN + Regime-aware Replay</strong> 虽然降低了 mismatch，但交易表现还没有显著超过 Uniform Replay。</li>
+  </ul>
+
+  <h3>4.2 Replay 机制：Regime-aware 明显降低 mismatch</h3>
+  <p>Uniform Replay 的平均 mismatch rate 为 <code>0.5674</code>，PER 为 <code>0.5785</code>，Regime-aware Replay 降至 <code>0.2772</code>。</p>
+  <p>这意味着 Regime-aware Replay 相比 Uniform Replay 将 mismatch rate 降低约 <strong>51.1%</strong>，相比 PER 降低约 <strong>52.1%</strong>。</p>
+  <div class="callout">
+    <strong>机制结论：</strong>Regime-aware Replay 达到了设计目标：它确实更少从与当前 regime 不一致的历史 transition 中采样。这支持后续继续研究 regime-aware sampling。
+  </div>
+
+  <h3>4.3 PER：TD-error 更高，但 mismatch 也更高</h3>
+  <p>PER 的平均 TD-error 为 <code>0.0138</code>，高于 Uniform Replay 的 <code>0.0097</code>。这说明 PER 确实更偏向高 TD-error 样本。</p>
+  <p>但 PER 的 mismatch rate 也高于 Uniform：<code>0.5785</code> vs <code>0.5674</code>。这说明高 TD-error 样本不一定来自当前 regime，可能包含更多旧 regime 或不兼容 regime 的 transition。</p>
+  <div class="warning">
+    <strong>研究含义：</strong>在金融非平稳环境中，TD-error priority 可能并不是可靠的 replay relevance signal。它可能提升样本“误差强度”，但不一定提升样本与当前 regime 的相关性。
+  </div>
+
+  <h3>4.4 Regime-aware：机制有效，但交易收益仍需调参或改进</h3>
+  <p>Regime-aware Replay 的 mismatch rate 最低，但 final value 只略高于 PER，低于 Uniform Replay。这说明当前 sampler 在“降低错配样本”上有效，但还没有把机制优势稳定转化为更好的 portfolio return。</p>
+  <p>可能原因包括：same-regime 比例过高导致样本多样性不足；交易成本和高换手对净值侵蚀较大；DQN 的离散动作空间较粗；当前结果是在线训练期表现，不是严格 train/test 分离后的回测表现。</p>
+</section>
+
+<section>
+  <h2>5. 单 seed 详细结果</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Label</th><th>Method</th><th>Seed</th><th>Final Value</th><th>Max Drawdown</th><th>Turnover</th><th>Reward</th><th>Mismatch</th><th>TD-error</th><th>Priority</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td>rule_based</td><td><code>online</code></td><td>0</td><td>0.055763</td><td>0.950525</td><td>1.047798</td><td>-0.000638</td><td>N/A</td><td>0.016575</td><td>N/A</td></tr><tr><td>rule_based</td><td><code>online</code></td><td>1</td><td>0.025337</td><td>0.977948</td><td>1.073501</td><td>-0.000812</td><td>N/A</td><td>0.016233</td><td>N/A</td></tr><tr><td>rule_based</td><td><code>online</code></td><td>2</td><td>0.053502</td><td>0.954368</td><td>1.056488</td><td>-0.000647</td><td>N/A</td><td>0.022306</td><td>N/A</td></tr><tr><td>rule_based</td><td><code>uniform</code></td><td>0</td><td>0.072043</td><td>0.936096</td><td>1.027029</td><td>-0.000581</td><td>0.567450</td><td>0.008393</td><td>N/A</td></tr><tr><td>rule_based</td><td><code>uniform</code></td><td>1</td><td>0.055534</td><td>0.951921</td><td>1.054868</td><td>-0.000639</td><td>0.566894</td><td>0.008906</td><td>N/A</td></tr><tr><td>rule_based</td><td><code>uniform</code></td><td>2</td><td>0.100111</td><td>0.919101</td><td>1.036898</td><td>-0.000509</td><td>0.567984</td><td>0.011857</td><td>N/A</td></tr><tr><td>rule_based</td><td><code>per</code></td><td>0</td><td>0.064323</td><td>0.944773</td><td>1.029238</td><td>-0.000606</td><td>0.577448</td><td>0.011469</td><td>0.027929</td></tr><tr><td>rule_based</td><td><code>per</code></td><td>1</td><td>0.039247</td><td>0.969192</td><td>1.068640</td><td>-0.000715</td><td>0.569912</td><td>0.013016</td><td>0.029450</td></tr><tr><td>rule_based</td><td><code>per</code></td><td>2</td><td>0.071908</td><td>0.935766</td><td>1.040433</td><td>-0.000582</td><td>0.588025</td><td>0.016856</td><td>0.033260</td></tr><tr><td>rule_based</td><td><code>regime</code></td><td>0</td><td>0.056115</td><td>0.952791</td><td>1.032479</td><td>-0.000636</td><td>0.276384</td><td>0.009281</td><td>0.026994</td></tr><tr><td>rule_based</td><td><code>regime</code></td><td>1</td><td>0.033490</td><td>0.971284</td><td>1.080498</td><td>-0.000750</td><td>0.275982</td><td>0.009661</td><td>0.027455</td></tr><tr><td>rule_based</td><td><code>regime</code></td><td>2</td><td>0.091165</td><td>0.917725</td><td>1.037193</td><td>-0.000529</td><td>0.279285</td><td>0.012333</td><td>0.030147</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2>6. 当前可写入报告的结论</h2>
+  <div class="note callout">
+    <p><strong>建议表述：</strong></p>
+    <p>Using rule-based regime labels, we compare DQN-online, DQN with uniform replay, DQN with PER, and DQN with regime-aware replay across three random seeds. The results show that standard replay methods suffer from substantial regime mismatch: Uniform Replay has an average mismatch rate of 0.5674, while PER has an even higher mismatch rate of 0.5785. The proposed regime-aware sampler reduces the mismatch rate to 0.2772, achieving about 51.1% reduction relative to Uniform Replay. However, this reduction does not yet translate into the best trading performance: Uniform Replay still achieves the highest average final portfolio value and the lowest average maximum drawdown. This suggests that regime-aware replay successfully addresses the replay contamination mechanism, but further tuning is needed to improve trading performance.</p>
+  </div>
+
+  <h3>下一步建议</h3>
+  <ol>
+    <li>对 <code>regime_same_ratio</code> 做 sensitivity test，例如 <code>0.3 / 0.4 / 0.5 / 0.6</code>，检查是否存在更优的 regime-aware sampling ratio。</li>
+    <li>降低交易成本或降低探索期换手，例如缩短 <code>epsilon_decay_steps</code>，观察 DQN 净值是否明显改善。</li>
+    <li>分别运行 <code>hmm</code> 与 <code>recap_cusum</code> labels，对比不同 regime labeling 对 mismatch rate 和交易表现的影响。</li>
+    <li>增加严格 train/test 分离，避免把训练期 portfolio value 当成正式回测表现。</li>
+  </ol>
+</section>
+
+
+</main>
+</body>
+</html>

@@ -1,0 +1,733 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DQN Replay 实验运行与评估说明</title>
+  <style>
+    :root {
+      --bg: #eef2f7;
+      --paper: #ffffff;
+      --ink: #17202a;
+      --muted: #5b6675;
+      --line: #d9e0ea;
+      --soft: #f7f9fc;
+      --blue: #1d4ed8;
+      --green: #0f766e;
+      --amber: #92400e;
+      --red: #991b1b;
+      --code: #111827;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Segoe UI", Arial, "Microsoft YaHei", sans-serif;
+      line-height: 1.62;
+      font-size: 16px;
+    }
+    main {
+      width: min(1180px, calc(100% - 32px));
+      margin: 28px auto;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      box-shadow: 0 14px 42px rgba(31, 41, 55, 0.08);
+      overflow: hidden;
+    }
+    header {
+      padding: 32px 38px;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(90deg, #f8fafc, #ecfeff);
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 32px;
+      line-height: 1.18;
+    }
+    h2 {
+      margin: 0 0 14px;
+      font-size: 23px;
+    }
+    h3 {
+      margin: 22px 0 8px;
+      font-size: 18px;
+    }
+    p { margin: 9px 0; }
+    section {
+      padding: 26px 38px;
+      border-bottom: 1px solid var(--line);
+    }
+    section:last-child { border-bottom: 0; }
+    .meta {
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .callout {
+      margin: 14px 0;
+      padding: 14px 16px;
+      background: #eff6ff;
+      border-left: 4px solid var(--blue);
+      border-radius: 6px;
+    }
+    .callout.green {
+      background: #ecfdf5;
+      border-left-color: var(--green);
+    }
+    .callout.amber {
+      background: #fff7ed;
+      border-left-color: var(--amber);
+    }
+    .callout.red {
+      background: #fef2f2;
+      border-left-color: var(--red);
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 14px 0;
+      font-size: 14px;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 10px 11px;
+      vertical-align: top;
+      text-align: left;
+    }
+    th {
+      background: var(--soft);
+      font-weight: 700;
+    }
+    code {
+      font-family: Consolas, "Courier New", monospace;
+      background: #f1f5f9;
+      padding: 1px 4px;
+      border-radius: 4px;
+    }
+    pre {
+      margin: 12px 0;
+      padding: 14px 16px;
+      background: var(--code);
+      color: #e5e7eb;
+      border-radius: 7px;
+      overflow-x: auto;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+      margin: 14px 0;
+    }
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 15px 16px;
+      background: #fbfdff;
+    }
+    .tag {
+      display: inline-block;
+      margin: 0 6px 6px 0;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: #dbeafe;
+      color: #1e40af;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .tag.green {
+      background: #ccfbf1;
+      color: #115e59;
+    }
+    .tag.amber {
+      background: #ffedd5;
+      color: #9a3412;
+    }
+    .small {
+      color: var(--muted);
+      font-size: 14px;
+    }
+    ul, ol {
+      margin: 8px 0 8px 22px;
+      padding: 0;
+    }
+    li { margin: 5px 0; }
+    @media (max-width: 820px) {
+      main {
+        width: calc(100% - 18px);
+        margin: 10px auto;
+      }
+      header, section {
+        padding: 20px;
+      }
+      h1 { font-size: 25px; }
+      .grid { grid-template-columns: 1fr; }
+      table { font-size: 13px; }
+    }
+    @media print {
+      body { background: #fff; }
+      main {
+        width: 100%;
+        margin: 0;
+        border: 0;
+        box-shadow: none;
+      }
+      section { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>DQN Replay 实验运行与评估说明</h1>
+    <div class="meta">适用项目：Regime-Aware-Replay-Research ｜ 内容：不同 regime label 的运行命令、实验评估标准、模型参数说明</div>
+  </header>
+
+  <section>
+    <h2>0. 实验目标</h2>
+    <p>本实验的核心不是证明某个交易策略已经足够盈利，而是验证在真实金融非平稳环境中，标准 replay buffer 是否会在当前 market regime 下采样到大量来自其他 regime 的历史 transition，以及 TD-error 优先采样是否会加剧或缓解这种问题。</p>
+    <div class="callout green">
+      <strong>一句话：</strong>比较 <code>DQN-online</code>、<code>DQN + Uniform Replay</code>、<code>DQN + PER</code>、<code>DQN + Regime-aware Replay</code> 在不同 regime label 方法下的表现与 replay mismatch 行为。
+    </div>
+  </section>
+
+  <section>
+    <h2>1. 实验方法矩阵</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>维度</th>
+          <th>选项</th>
+          <th>说明</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Regime label 方法</td>
+          <td><code>rule_based</code><br><code>hmm</code><br><code>recap_cusum</code></td>
+          <td>三种不同的市场状态划分方法。DQN 实验不重新划分 regime，而是读取 <code>outputs/regime_labels/all_regime_labels.csv</code> 中对应方法的标签。</td>
+        </tr>
+        <tr>
+          <td>RL / Replay 方法</td>
+          <td><code>online</code><br><code>uniform</code><br><code>per</code><br><code>regime</code></td>
+          <td>分别对应 DQN-only、DQN + Uniform Replay、DQN + PER、DQN + Regime-aware Replay。</td>
+        </tr>
+        <tr>
+          <td>随机种子</td>
+          <td><code>0,1,2</code></td>
+          <td>每个方法默认跑三个 seed，用于减少单次随机结果的偶然性。</td>
+        </tr>
+      </tbody>
+    </table>
+    <p>完整实验矩阵为：3 种 label 方法 × 4 种 replay 方法 × 3 个 seeds，共 36 次运行。</p>
+  </section>
+
+  <section>
+    <h2>2. 不同 label 方法的运行命令</h2>
+
+    <h3>2.1 运行 rule_based labels</h3>
+    <pre>python scripts\run_dqn_replay.py --label-method rule_based --replays online,uniform,per,regime --seeds 0,1,2</pre>
+    <p>输出文件主要位于：</p>
+    <pre>outputs\dqn_replay\analysis\rule_based_dqn_replay_summary.csv
+outputs\dqn_replay\analysis\rule_based_portfolio_value.png
+outputs\dqn_replay\analysis\rule_based_mismatch_rate.png
+outputs\dqn_replay\analysis\rule_based_td_error.png
+outputs\dqn_replay\analysis\rule_based_priority.png</pre>
+
+    <h3>2.2 运行 HMM labels</h3>
+    <pre>python scripts\run_dqn_replay.py --label-method hmm --replays online,uniform,per,regime --seeds 0,1,2</pre>
+    <p>输出文件主要位于：</p>
+    <pre>outputs\dqn_replay\analysis\hmm_dqn_replay_summary.csv
+outputs\dqn_replay\analysis\hmm_portfolio_value.png
+outputs\dqn_replay\analysis\hmm_mismatch_rate.png
+outputs\dqn_replay\analysis\hmm_td_error.png
+outputs\dqn_replay\analysis\hmm_priority.png</pre>
+
+    <h3>2.3 运行 ReCAP-CUSUM labels</h3>
+    <pre>python scripts\run_dqn_replay.py --label-method recap_cusum --replays online,uniform,per,regime --seeds 0,1,2</pre>
+    <p>输出文件主要位于：</p>
+    <pre>outputs\dqn_replay\analysis\recap_cusum_dqn_replay_summary.csv
+outputs\dqn_replay\analysis\recap_cusum_portfolio_value.png
+outputs\dqn_replay\analysis\recap_cusum_mismatch_rate.png
+outputs\dqn_replay\analysis\recap_cusum_td_error.png
+outputs\dqn_replay\analysis\recap_cusum_priority.png</pre>
+
+    <h3>2.4 一次性运行三种 label 方法</h3>
+    <p>PowerShell 中可以直接运行：</p>
+    <pre>foreach ($label in "rule_based","hmm","recap_cusum") {
+    python scripts\run_dqn_replay.py --label-method $label --replays online,uniform,per,regime --seeds 0,1,2
+}</pre>
+
+    <div class="callout amber">
+      如果只想快速补跑某个方法，可以修改 <code>--replays</code>，例如只跑 regime-aware replay：<br>
+      <code>python scripts\run_dqn_replay.py --label-method rule_based --replays regime --seeds 0,1,2</code>
+    </div>
+  </section>
+
+  <section>
+    <h2>3. 四种方法的含义</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>方法名</th>
+          <th>完整含义</th>
+          <th>实验作用</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>online</code></td>
+          <td>DQN-only / no replay</td>
+          <td>不用 replay buffer，只用最新 transition 更新。作为没有历史经验回放的基础参照组。</td>
+        </tr>
+        <tr>
+          <td><code>uniform</code></td>
+          <td>DQN + Uniform Replay</td>
+          <td>从 replay buffer 中等概率随机抽样，用于验证普通 replay 是否会混入大量 mismatched-regime transitions。</td>
+        </tr>
+        <tr>
+          <td><code>per</code></td>
+          <td>DQN + Prioritized Experience Replay</td>
+          <td>按 TD-error 大小优先抽样，用于验证 TD-error priority 在金融非平稳环境下是否会偏向旧 regime 的高误差样本。</td>
+        </tr>
+        <tr>
+          <td><code>regime</code></td>
+          <td>DQN + Regime-aware Replay</td>
+          <td>采样时显式考虑当前 regime，按 same-regime、high-TD、recent、random 的比例混合抽样，用于降低 mismatch rate。</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>4. 实验评估标准</h2>
+
+    <h3>4.1 交易表现指标</h3>
+    <p>交易表现指标用于判断 agent 作为交易策略的基本表现，但不是本实验唯一重点。</p>
+    <table>
+      <thead>
+        <tr>
+          <th>指标</th>
+          <th>方向</th>
+          <th>含义</th>
+          <th>输出列</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Final Portfolio Value</td>
+          <td>越高越好</td>
+          <td>最终组合净值，初始值为 1。</td>
+          <td><code>final_portfolio_value</code></td>
+        </tr>
+        <tr>
+          <td>Max Drawdown</td>
+          <td>越低越好</td>
+          <td>最大回撤，衡量风险控制能力。</td>
+          <td><code>max_drawdown</code></td>
+        </tr>
+        <tr>
+          <td>Mean Turnover</td>
+          <td>适度较低更好</td>
+          <td>平均换手率。过高说明交易过于频繁，交易成本压力大。</td>
+          <td><code>mean_turnover</code></td>
+        </tr>
+        <tr>
+          <td>Mean Reward</td>
+          <td>越高越好</td>
+          <td>平均单步 reward，即组合 log return 扣除交易成本后的均值。</td>
+          <td><code>mean_reward</code></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>4.2 Replay 机制诊断指标</h3>
+    <p>这部分才是本项目当前阶段的核心，用于判断 replay 是否存在 regime contamination。</p>
+    <table>
+      <thead>
+        <tr>
+          <th>指标</th>
+          <th>方向</th>
+          <th>含义</th>
+          <th>输出列</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Mismatch Rate</td>
+          <td>越低越好</td>
+          <td>采样 batch 中 <code>sampled_regime != current_regime</code> 的比例。</td>
+          <td><code>mean_mismatch_rate</code></td>
+        </tr>
+        <tr>
+          <td>Sample Age</td>
+          <td>需结合 regime 判断</td>
+          <td>被采样 transition 距离当前时间的步数。不是越小越好，但过旧样本可能更容易过时。</td>
+          <td><code>mean_sample_age</code>, <code>median_sample_age</code></td>
+        </tr>
+        <tr>
+          <td>TD-error by Regime</td>
+          <td>用于解释采样行为</td>
+          <td>不同 regime 样本的 TD-error。如果旧 regime 的 TD-error 高，PER 可能更容易抽到旧样本。</td>
+          <td><code>td_error_regime_*</code></td>
+        </tr>
+        <tr>
+          <td>Priority by Regime</td>
+          <td>PER / regime 专用</td>
+          <td>观察 priority 是否集中在某些 regime 上。</td>
+          <td><code>priority_regime_*</code>, <code>mean_priority</code></td>
+        </tr>
+        <tr>
+          <td>Source Composition</td>
+          <td>regime 专用</td>
+          <td>Regime-aware replay 中 same-regime、high-TD、recent、random 样本各占多少。</td>
+          <td><code>source_same_regime_count</code>, <code>source_high_td_count</code>, <code>source_recent_count</code>, <code>source_random_count</code></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="callout green">
+      <strong>判断逻辑：</strong>如果某个方法收益更高，同时 mismatch rate 更低、drawdown 更小、turnover 不明显升高，说明它更适合 regime-shifting market。若收益提升但 mismatch rate 和旧 regime priority 也升高，则说明它可能没有真正解决 replay contamination。
+    </div>
+  </section>
+
+  <section>
+    <h2>5. 结果解读模板</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>现象</th>
+          <th>解释</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>uniform</code> mismatch rate 高</td>
+          <td>说明标准随机 replay 会把不同 market regimes 的历史 transition 混在一起训练。</td>
+        </tr>
+        <tr>
+          <td><code>per</code> TD-error 高且 mismatch rate 高于 <code>uniform</code></td>
+          <td>说明 TD-error priority 可能偏向旧 regime 的高误差样本，支持“TD-error 在非平稳金融环境中不一定可靠”的论点。</td>
+        </tr>
+        <tr>
+          <td><code>regime</code> mismatch rate 明显下降</td>
+          <td>说明 regime-aware sampling 有效降低了 replay contamination。</td>
+        </tr>
+        <tr>
+          <td><code>regime</code> final value 提升、max drawdown 下降</td>
+          <td>说明降低 mismatch 不只是日志现象，也可能改善实际交易适应性。</td>
+        </tr>
+        <tr>
+          <td><code>online</code> 表现较弱但 mismatch 为 N/A</td>
+          <td>这是合理的。online 没有 replay buffer，因此没有 mismatch rate，但它的 sample efficiency 通常较差。</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>6. 模型与实验参数说明</h2>
+
+    <h3>6.1 数据与标签参数</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>参数</th>
+          <th>默认值</th>
+          <th>说明</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>--market-csv</code></td>
+          <td><code>data/market_indices_20080601_20260531/market_regime_features_wide.csv</code></td>
+          <td>真实市场数据路径。</td>
+        </tr>
+        <tr>
+          <td><code>--labels-csv</code></td>
+          <td><code>outputs/regime_labels/all_regime_labels.csv</code></td>
+          <td>已生成的 regime label 文件。</td>
+        </tr>
+        <tr>
+          <td><code>--label-method</code></td>
+          <td><code>rule_based</code></td>
+          <td>选择使用哪种 regime label，可选 <code>rule_based</code>、<code>hmm</code>、<code>recap_cusum</code>。</td>
+        </tr>
+        <tr>
+          <td><code>--tradable-symbols</code></td>
+          <td><code>DIA,SPY,QQQ</code></td>
+          <td>DQN 可交易资产。</td>
+        </tr>
+        <tr>
+          <td><code>--primary-symbol</code></td>
+          <td><code>SPY</code></td>
+          <td>构造市场特征时的主参考资产。</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>6.2 交易环境参数</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>项目</th>
+          <th>默认设定</th>
+          <th>说明</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>动作空间</td>
+          <td><code>cash / DIA / SPY / QQQ / equal_weight</code></td>
+          <td>DQN 使用离散动作，而不是连续权重分配。</td>
+        </tr>
+        <tr>
+          <td>Reward</td>
+          <td><code>log(V_t / V_{t-1}) - transaction_cost</code></td>
+          <td>组合 log return 扣除交易成本。</td>
+        </tr>
+        <tr>
+          <td><code>--transaction-cost-bps</code></td>
+          <td><code>10.0</code></td>
+          <td>交易成本，10 bps = 0.1%。</td>
+        </tr>
+        <tr>
+          <td>State features</td>
+          <td><code>ret_short, ret_long, vol, trend, vix, turbulence + previous action</code></td>
+          <td>实际使用哪些列取决于数据中存在的特征。</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>6.3 DQN 参数</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>参数</th>
+          <th>默认值</th>
+          <th>说明</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>--gamma</code></td>
+          <td><code>0.99</code></td>
+          <td>折扣因子，越接近 1 越重视长期收益。</td>
+        </tr>
+        <tr>
+          <td><code>--lr</code></td>
+          <td><code>1e-3</code></td>
+          <td>学习率。</td>
+        </tr>
+        <tr>
+          <td><code>--hidden-dim</code></td>
+          <td><code>128</code></td>
+          <td>Q-network 两层 MLP 的隐藏层维度。</td>
+        </tr>
+        <tr>
+          <td><code>--target-update-freq</code></td>
+          <td><code>500</code></td>
+          <td>每 500 次参数更新同步一次 target network。</td>
+        </tr>
+        <tr>
+          <td><code>--epsilon-start</code></td>
+          <td><code>1.0</code></td>
+          <td>初始探索概率。</td>
+        </tr>
+        <tr>
+          <td><code>--epsilon-end</code></td>
+          <td><code>0.05</code></td>
+          <td>最低探索概率。</td>
+        </tr>
+        <tr>
+          <td><code>--epsilon-decay-steps</code></td>
+          <td><code>8000</code></td>
+          <td>epsilon 从 1.0 衰减到 0.05 的步数。</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>6.4 Replay 参数</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>参数</th>
+          <th>默认值</th>
+          <th>适用方法</th>
+          <th>说明</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>--buffer-size</code></td>
+          <td><code>50000</code></td>
+          <td><code>uniform, per, regime</code></td>
+          <td>Replay buffer 最大容量。</td>
+        </tr>
+        <tr>
+          <td><code>--batch-size</code></td>
+          <td><code>64</code></td>
+          <td><code>uniform, per, regime</code></td>
+          <td>每次训练从 buffer 中抽取的 transition 数量。</td>
+        </tr>
+        <tr>
+          <td><code>--warmup-steps</code></td>
+          <td><code>256</code></td>
+          <td><code>uniform, per, regime</code></td>
+          <td>buffer 至少积累多少 transition 后开始训练。</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>6.5 PER 参数</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>参数</th>
+          <th>默认值</th>
+          <th>说明</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>--per-alpha</code></td>
+          <td><code>0.6</code></td>
+          <td>priority 强度。越大越偏向高 TD-error 样本。</td>
+        </tr>
+        <tr>
+          <td><code>--per-beta-start</code></td>
+          <td><code>0.4</code></td>
+          <td>importance-sampling correction 的初始强度。</td>
+        </tr>
+        <tr>
+          <td><code>--per-beta-end</code></td>
+          <td><code>1.0</code></td>
+          <td>importance-sampling correction 的最终强度。</td>
+        </tr>
+        <tr>
+          <td><code>--per-eps</code></td>
+          <td><code>1e-6</code></td>
+          <td>防止 priority 为 0。</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>6.6 Regime-aware Replay 参数</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>参数</th>
+          <th>默认值</th>
+          <th>含义</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>--regime-same-ratio</code></td>
+          <td><code>0.50</code></td>
+          <td>每个 batch 中优先抽取当前 regime 样本的比例。</td>
+        </tr>
+        <tr>
+          <td><code>--regime-high-td-ratio</code></td>
+          <td><code>0.25</code></td>
+          <td>每个 batch 中按 TD-error priority 抽样的比例。</td>
+        </tr>
+        <tr>
+          <td><code>--regime-recent-ratio</code></td>
+          <td><code>0.15</code></td>
+          <td>每个 batch 中抽取近期样本的比例。</td>
+        </tr>
+        <tr>
+          <td><code>--regime-random-ratio</code></td>
+          <td><code>0.10</code></td>
+          <td>每个 batch 中随机样本比例，用于保持多样性。</td>
+        </tr>
+        <tr>
+          <td><code>--regime-recent-window</code></td>
+          <td><code>252</code></td>
+          <td>recent samples 的窗口长度，252 约等于一年交易日。</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>7. 推荐报告表格</h2>
+    <p>最终汇报时，可以对每个 label method 单独给出一张表：</p>
+    <table>
+      <thead>
+        <tr>
+          <th>Label Method</th>
+          <th>Replay Method</th>
+          <th>Final Value ↑</th>
+          <th>Max Drawdown ↓</th>
+          <th>Turnover ↓</th>
+          <th>Mismatch Rate ↓</th>
+          <th>TD-error</th>
+          <th>Priority</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>rule_based</td>
+          <td>online</td>
+          <td></td>
+          <td></td>
+          <td></td>
+          <td>N/A</td>
+          <td></td>
+          <td>N/A</td>
+        </tr>
+        <tr>
+          <td>rule_based</td>
+          <td>uniform</td>
+          <td></td>
+          <td></td>
+          <td></td>
+          <td></td>
+          <td></td>
+          <td>N/A</td>
+        </tr>
+        <tr>
+          <td>rule_based</td>
+          <td>per</td>
+          <td></td>
+          <td></td>
+          <td></td>
+          <td></td>
+          <td></td>
+          <td></td>
+        </tr>
+        <tr>
+          <td>rule_based</td>
+          <td>regime</td>
+          <td></td>
+          <td></td>
+          <td></td>
+          <td></td>
+          <td></td>
+          <td></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="callout">
+      <strong>最终结论应围绕：</strong>不同 label 方法下，regime-aware replay 是否稳定降低 mismatch rate；PER 是否因 TD-error 机制抽到更多 mismatched-regime 样本；这些 replay 行为是否和 drawdown、turnover、final portfolio value 有关。
+    </div>
+  </section>
+
+  <section>
+    <h2>8. 文献与项目依据</h2>
+    <ul>
+      <li>ReCAP 将金融投资问题明确放在 regime-shifting continual portfolio management 场景下，使用 adaptive regime detection、policy vector library 和 regime gate 处理市场非平稳性。</li>
+      <li>DEER 指出在非平稳环境中，传统基于 TD-error 的 replay priority 可能会高估旧环境样本的重要性，因为 TD-error 同时受到策略更新和环境变化影响。</li>
+      <li>LILAC 将非平稳环境理解为由隐藏上下文或动态参数驱动的一系列相关 MDP，为“market regime 可以被视为 hidden context”提供概念基础。</li>
+      <li>本项目当前实现并不复现 ReCAP / DEER / LILAC 的完整模型，而是聚焦在更小的问题：真实金融 regime 下，DQN 的 replay sampling 是否存在 contamination，以及简单 regime-aware sampler 是否能降低 mismatch。</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>
