@@ -155,7 +155,7 @@ For generalization experiments, use the model-library runner to call multiple
 RL models under the same regime labels, replay settings, and safety rules:
 
 ```bash
-python scripts/run_rl_library.py --models dqn,sac --label-method rule_based --replays uniform,regime,deer --seeds 0 --max-steps 120
+python scripts/run_rl_library.py --models dqn,sac,regime_anchor,vol_target,cash,equal_weight --label-method rule_based --replays uniform,regime,deer --seeds 0 --max-steps 120
 ```
 
 The shared policy-safety layer is enabled by default for DQN and SAC. It acts as
@@ -175,3 +175,15 @@ The combined model summary is written to:
 ```text
 outputs/rl_library/analysis/rl_library_summary.csv
 ```
+
+The runner also writes a gated selection table:
+
+```text
+outputs/rl_library/analysis/selected_policies.csv
+```
+
+The performance gate marks policies as failed when they fall below a minimum
+final value, exceed a drawdown cap, or trade too aggressively. This prevents the
+model library from treating unstable RL runs as usable research evidence and
+keeps non-learning anchors such as `regime_anchor` and `vol_target` available as
+fallbacks.

@@ -9,9 +9,12 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from src.rl_trading.baseline_policies import BaselineConfig
+from src.rl_trading.baseline_policies import run_many as run_baseline_many
 from src.rl_trading.dqn_replay import ExperimentConfig as DQNConfig
 from src.rl_trading.dqn_replay import run_many as run_dqn_many
-from src.rl_trading.model_registry import available_models, compatible_replays, validate_models
+from src.rl_trading.model_registry import MODEL_REGISTRY, available_models, compatible_replays, validate_models
+from src.rl_trading.performance_gate import PerformanceGateConfig, apply_performance_gate, select_best_policies
 from src.rl_trading.sac_replay import SACExperimentConfig
 from src.rl_trading.sac_replay import run_many as run_sac_many
 
@@ -28,7 +31,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Run the local RL model library for regime-aware replay generalization experiments."
     )
-    parser.add_argument("--models", default="dqn,sac", help=f"Comma-separated models: {','.join(available_models())}")
+    parser.add_argument(
+        "--models",
+        default="dqn,sac,regime_anchor,vol_target,cash,equal_weight",
+        help=f"Comma-separated models: {','.join(available_models())}",
+    )
     parser.add_argument("--market-csv", default="data/market_indices_20080601_20260531/market_regime_features_wide.csv")
     parser.add_argument("--labels-csv", default="outputs/regime_labels/all_regime_labels.csv")
     parser.add_argument("--output-root", default="outputs/rl_library")
@@ -68,6 +75,12 @@ def main() -> None:
     parser.add_argument("--sac-start-steps", type=int, default=128)
     parser.add_argument("--sac-updates-per-step", type=int, default=1)
     parser.add_argument("--sac-action-temperature", type=float, default=1.0)
+    parser.add_argument("--vol-target-ann-vol", type=float, default=0.12)
+    parser.add_argument("--vol-target-window", type=int, default=20)
+
+    parser.add_argument("--gate-min-final-value", type=float, default=0.90)
+    parser.add_argument("--gate-max-drawdown", type=float, default=0.35)
+    parser.add_argument("--gate-max-turnover", type=float, default=1.25)
 
     parser.add_argument("--per-alpha", type=float, default=0.6)
     parser.add_argument("--per-beta-start", type=float, default=0.4)
@@ -102,12 +115,37 @@ def main() -> None:
 
     summaries = []
     for model in models:
+        spec = MODEL_REGISTRY[model]
         model_replays = compatible_replays(model, replays)
         if not model_replays:
             print(f"[skip] {model}: no compatible replay method in {replays}")
             continue
         for label_method in label_methods:
-            if model == "dqn":
+            if spec.family == "baseline":
+                cfg = BaselineConfig(
+                    market_csv=args.market_csv,
+                    labels_csv=args.labels_csv,
+                    output_root=str(Path(args.output_root) / "baselines"),
+                    label_method=label_method,
+                    policy=model,
+                    tradable_symbols=symbols,
+                    primary_symbol=args.primary_symbol,
+                    transaction_cost_bps=args.transaction_cost_bps,
+                    max_steps=args.max_steps,
+                    safety_enabled=not args.disable_policy_safety,
+                    safety_min_cash_weight=args.safety_min_cash_weight,
+                    safety_max_asset_weight=args.safety_max_asset_weight,
+                    safety_max_turnover=args.safety_max_turnover,
+                    safety_regime_blend=0.0,
+                    safety_risk_on_cash=args.safety_risk_on_cash,
+                    safety_sideways_cash=args.safety_sideways_cash,
+                    safety_high_vol_cash=args.safety_high_vol_cash,
+                    safety_risk_off_cash=args.safety_risk_off_cash,
+                    vol_target_ann_vol=args.vol_target_ann_vol,
+                    vol_target_window=args.vol_target_window,
+                )
+                summary = run_baseline_many(cfg, [model], seeds)
+            elif model == "dqn":
                 cfg = DQNConfig(
                     market_csv=args.market_csv,
                     labels_csv=args.labels_csv,
@@ -216,17 +254,30 @@ def main() -> None:
 
             summary = summary.copy()
             summary.insert(0, "model", model)
+            summary.insert(1, "model_family", spec.family)
             summaries.append(summary)
 
     if not summaries:
         raise RuntimeError("No model runs were executed.")
 
     combined = pd.concat(summaries, ignore_index=True)
+    combined = apply_performance_gate(
+        combined,
+        PerformanceGateConfig(
+            min_final_value=args.gate_min_final_value,
+            max_drawdown=args.gate_max_drawdown,
+            max_turnover=args.gate_max_turnover,
+        ),
+    )
+    selected = select_best_policies(combined)
     analysis_dir = Path(args.output_root) / "analysis"
     analysis_dir.mkdir(parents=True, exist_ok=True)
     summary_path = analysis_dir / "rl_library_summary.csv"
+    selected_path = analysis_dir / "selected_policies.csv"
     combined.to_csv(summary_path, index=False)
+    selected.to_csv(selected_path, index=False)
     print(f"\n[rl-library] wrote {summary_path}")
+    print(f"[rl-library] wrote {selected_path}")
     print(combined.to_string(index=False))
 
 

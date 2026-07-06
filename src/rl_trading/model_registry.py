@@ -27,6 +27,34 @@ MODEL_REGISTRY: dict[str, RLModelSpec] = {
         default_replays=("uniform", "per", "regime", "deer"),
         description="Continuous-action SAC baseline with replay diagnostics.",
     ),
+    "cash": RLModelSpec(
+        name="cash",
+        family="baseline",
+        action_space="deterministic_portfolio_weights",
+        default_replays=("policy",),
+        description="All-cash capital-preservation baseline.",
+    ),
+    "equal_weight": RLModelSpec(
+        name="equal_weight",
+        family="baseline",
+        action_space="deterministic_portfolio_weights",
+        default_replays=("policy",),
+        description="Equal-weight long-only asset baseline.",
+    ),
+    "regime_anchor": RLModelSpec(
+        name="regime_anchor",
+        family="baseline",
+        action_space="regime_conditioned_portfolio_weights",
+        default_replays=("policy",),
+        description="ReCAP-inspired regime anchor policy library baseline.",
+    ),
+    "vol_target": RLModelSpec(
+        name="vol_target",
+        family="baseline",
+        action_space="volatility_targeted_portfolio_weights",
+        default_replays=("policy",),
+        description="Equal-weight asset exposure scaled by realized volatility.",
+    ),
 }
 
 
@@ -43,6 +71,8 @@ def validate_models(models: list[str]) -> list[str]:
 
 def compatible_replays(model: str, requested: list[str]) -> list[str]:
     spec = MODEL_REGISTRY[model]
+    if spec.family == "baseline":
+        return ["policy"]
     allowed = set(spec.default_replays)
     if model == "dqn":
         allowed.add("online")
