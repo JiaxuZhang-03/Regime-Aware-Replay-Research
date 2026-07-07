@@ -54,10 +54,20 @@ def main() -> None:
     parser.add_argument("--primary-symbol", default="SPY")
 
     parser.add_argument("--transaction-cost-bps", type=float, default=10.0)
+    parser.add_argument("--disable-policy-safety", action="store_true")
+    parser.add_argument("--safety-min-cash-weight", type=float, default=0.03)
+    parser.add_argument("--safety-max-asset-weight", type=float, default=0.85)
+    parser.add_argument("--safety-max-turnover", type=float, default=0.75)
+    parser.add_argument("--safety-regime-blend", type=float, default=0.20)
+    parser.add_argument("--safety-risk-on-cash", type=float, default=0.05)
+    parser.add_argument("--safety-sideways-cash", type=float, default=0.25)
+    parser.add_argument("--safety-high-vol-cash", type=float, default=0.55)
+    parser.add_argument("--safety-risk-off-cash", type=float, default=0.70)
 
     parser.add_argument("--buffer-size", type=int, default=50000)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--warmup-steps", type=int, default=256)
+    parser.add_argument("--max-steps", type=int, default=0)
 
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -122,9 +132,19 @@ def main() -> None:
             tradable_symbols=tuple(parse_csv_list(args.tradable_symbols)),
             primary_symbol=args.primary_symbol,
             transaction_cost_bps=args.transaction_cost_bps,
+            safety_enabled=not args.disable_policy_safety,
+            safety_min_cash_weight=args.safety_min_cash_weight,
+            safety_max_asset_weight=args.safety_max_asset_weight,
+            safety_max_turnover=args.safety_max_turnover,
+            safety_regime_blend=args.safety_regime_blend,
+            safety_risk_on_cash=args.safety_risk_on_cash,
+            safety_sideways_cash=args.safety_sideways_cash,
+            safety_high_vol_cash=args.safety_high_vol_cash,
+            safety_risk_off_cash=args.safety_risk_off_cash,
             buffer_size=args.buffer_size,
             batch_size=args.batch_size,
             warmup_steps=args.warmup_steps,
+            max_steps=args.max_steps,
             gamma=args.gamma,
             lr=args.lr,
             hidden_dim=args.hidden_dim,

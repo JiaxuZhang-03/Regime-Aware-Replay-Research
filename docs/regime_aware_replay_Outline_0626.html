@@ -1,0 +1,574 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Regime-Aware Replay Presentation Brief</title>
+  <style>
+    :root {
+      --ink: #18212f;
+      --muted: #586272;
+      --line: #d9dee7;
+      --paper: #ffffff;
+      --canvas: #eef1f5;
+      --blue: #1f5f99;
+      --green: #25705a;
+      --amber: #9b5a16;
+      --red: #a13a37;
+      --soft-blue: #eef6fc;
+      --soft-green: #eef8f3;
+      --soft-amber: #fff7e8;
+      --soft-red: #fff1f1;
+      --soft-gray: #f6f8fb;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--canvas);
+      color: var(--ink);
+      font-family: Arial, "Segoe UI", sans-serif;
+      line-height: 1.55;
+    }
+
+    .page {
+      width: min(1260px, calc(100% - 28px));
+      margin: 22px auto;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      box-shadow: 0 18px 42px rgba(24, 33, 47, .08);
+    }
+
+    header {
+      padding: 44px 50px 38px;
+      color: #fff;
+      background: #17324d;
+    }
+
+    .eyebrow {
+      margin: 0 0 12px;
+      color: #9fd3e6;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      max-width: 980px;
+      margin: 0 0 18px;
+      font-size: 42px;
+      line-height: 1.12;
+      letter-spacing: 0;
+    }
+
+    header p {
+      max-width: 980px;
+      margin: 0;
+      color: #dbe8f1;
+      font-size: 20px;
+    }
+
+    section {
+      padding: 38px 50px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    section:last-child { border-bottom: 0; }
+    section:nth-child(even) { background: #fbfcfe; }
+
+    .section-title {
+      display: grid;
+      grid-template-columns: 56px 1fr;
+      gap: 18px;
+      align-items: start;
+      margin-bottom: 22px;
+    }
+
+    .num {
+      padding-top: 8px;
+      border-top: 4px solid var(--blue);
+      color: var(--blue);
+      font-size: 21px;
+      font-weight: 700;
+    }
+
+    h2 {
+      margin: 0 0 7px;
+      font-size: 30px;
+      line-height: 1.22;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 0 0 10px;
+      font-size: 20px;
+      line-height: 1.3;
+      letter-spacing: 0;
+    }
+
+    p { margin: 0 0 12px; font-size: 17px; }
+    .lead { color: var(--muted); font-size: 19px; }
+    .small { color: var(--muted); font-size: 14px; }
+
+    ul, ol { margin: 0; padding-left: 22px; }
+    li { margin: 7px 0; font-size: 16px; }
+
+    table {
+      width: 100%;
+      margin: 16px 0 0;
+      border-collapse: collapse;
+      font-size: 15px;
+      background: #fff;
+    }
+
+    th, td {
+      border: 1px solid var(--line);
+      padding: 11px 12px;
+      vertical-align: top;
+      text-align: left;
+    }
+
+    th {
+      color: #fff;
+      background: #17324d;
+      font-weight: 700;
+    }
+
+    tr:nth-child(even) td { background: var(--soft-gray); }
+
+    .grid-2, .grid-3 {
+      display: grid;
+      gap: 18px;
+      margin-top: 14px;
+    }
+
+    .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+    .card {
+      padding: 18px 19px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+    }
+
+    .card.blue { border-top: 5px solid var(--blue); }
+    .card.green { border-top: 5px solid var(--green); }
+    .card.amber { border-top: 5px solid var(--amber); }
+    .card.red { border-top: 5px solid var(--red); }
+
+    .callout {
+      margin: 18px 0;
+      padding: 16px 18px;
+      border-left: 5px solid var(--blue);
+      border-radius: 4px;
+      background: var(--soft-blue);
+      font-size: 17px;
+    }
+
+    .callout.green { border-left-color: var(--green); background: var(--soft-green); }
+    .callout.amber { border-left-color: var(--amber); background: var(--soft-amber); }
+    .callout.red { border-left-color: var(--red); background: var(--soft-red); }
+
+    .tag {
+      display: inline-block;
+      margin: 0 6px 6px 0;
+      padding: 3px 8px;
+      border: 1px solid #b8c8d8;
+      border-radius: 4px;
+      color: #17324d;
+      background: var(--soft-blue);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .priority {
+      display: inline-block;
+      min-width: 68px;
+      padding: 3px 7px;
+      border-radius: 4px;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 700;
+      text-align: center;
+    }
+
+    .p1 { background: var(--green); }
+    .p2 { background: var(--blue); }
+    .p3 { background: var(--amber); }
+    .fallback { background: var(--red); }
+
+    .talk {
+      margin-top: 14px;
+      padding: 13px 15px;
+      border: 1px dashed #aeb9c8;
+      border-radius: 6px;
+      background: #fcfdff;
+      color: #2a3340;
+      font-size: 15px;
+    }
+
+    code {
+      padding: 2px 5px;
+      border-radius: 4px;
+      background: #e9edf3;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: .92em;
+    }
+
+    @media (max-width: 860px) {
+      .page { width: calc(100% - 14px); margin: 8px auto; }
+      header, section { padding: 26px 22px; }
+      h1 { font-size: 31px; }
+      .section-title { grid-template-columns: 44px 1fr; }
+      .grid-2, .grid-3 { grid-template-columns: 1fr; }
+      table { display: block; overflow-x: auto; }
+    }
+
+    @media print {
+      body { background: #fff; }
+      .page { width: 100%; margin: 0; box-shadow: none; border: 0; }
+      section { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <p class="eyebrow">Presentation Brief | Regime-Aware Replay for Financial RL</p>
+    <h1>From Regime-Aware Portfolio RL to Regime-Aware Experience Replay</h1>
+    <p>
+      Goal for tonight: explain the research gap clearly, show what we have already built, and propose a validation path that can convince a reviewer that the replay mechanism is useful.
+    </p>
+  </header>
+
+  <section>
+    <div class="section-title">
+      <div class="num">01</div>
+      <div>
+        <h2>One-Sentence Positioning</h2>
+        <p class="lead">We are not trying to claim that markets have regimes or that regime-aware portfolio RL is new. Our narrower question is about replay.</p>
+      </div>
+    </div>
+
+    <div class="callout green">
+      <strong>Research question:</strong> When a financial RL agent trains from a replay buffer that mixes multiple market regimes, can regime-aware and discrepancy-aware sampling reduce stale experience reuse and improve post-shift adaptation, risk control, or out-of-sample stability?
+    </div>
+
+    <div class="grid-3">
+      <article class="card blue">
+        <h3>The Problem</h3>
+        <p>Replay buffers improve sample efficiency, but financial data are non-stationary. A transition from a bull market may not be equally useful in a high-volatility selloff.</p>
+      </article>
+      <article class="card green">
+        <h3>The Method</h3>
+        <p>Use external regime labels plus DEER-style Q-discrepancy to decide which historical transitions are still relevant after a regime boundary.</p>
+      </article>
+      <article class="card amber">
+        <h3>Expected Outcomes</h3>
+        <p>We expect better post-boundary adaptation, lower replay mismatch, cleaner priority behavior, and more stable risk metrics such as drawdown and turnover.</p>
+      </article>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-title">
+      <div class="num">02</div>
+      <div>
+        <h2>Two Anchor Papers and the Gap</h2>
+        <p class="lead">ReCAP motivates the financial-regime setting. DEER motivates the replay-priority mechanism. Our gap is at their intersection.</p>
+      </div>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Paper</th>
+          <th>What It Does</th>
+          <th>Why It Matters for Us</th>
+          <th>Remaining Gap</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>ReCAP</strong><br>Regime-Adaptive Continual Learning for Portfolio Management</td>
+          <td>ReCAP is like giving the agent several regime-specific strategy memories. When the market changes, it does not train from scratch; it decides which historical policy memories should be reused and mixed for the current market.</td>
+          <td>Its form is close to our problem because it is also regime-aware financial RL. We can use its experimental design as a reference for validating our proposed replay model.</td>
+          <td>It is mainly <strong>policy-level adaptation</strong>. It does not isolate replay-buffer contamination or transition-level sampling as the main object of study.</td>
+        </tr>
+        <tr>
+          <td><strong>DEER</strong><br>Sample Efficient Experience Replay in Non-Stationary Environments</td>
+          <td>DEER says that after the environment changes, a high-error old sample may not be useful; it may simply be stale. So it compares old and new value estimates and changes replay priority accordingly.</td>
+          <td>It provides the core idea for regime-aware replay: replay should depend not only on TD-error, but also on whether a transition still matches the current environment.</td>
+          <td>It is a general control paper, not a financial-market paper. It does not study market regimes, portfolio backtests, transaction costs, drawdown, or turnover.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="callout">
+      <strong>Proposed gap:</strong> prior work studies either financial regime-aware policy adaptation or general non-stationary replay. We study <strong>financial regime-aware experience replay</strong>: how replay sampling should change when market regimes shift.
+    </div>
+  </section>
+
+  <section>
+    <div class="section-title">
+      <div class="num">03</div>
+      <div>
+        <h2>What Our Current MVP Looks Like</h2>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <article class="card blue">
+        <h3>Already Built or In Progress</h3>
+        <ul>
+          <li>Three regime labelers: rule-based, HMM, and ReCAP-inspired CUSUM.</li>
+          <li>DQN comparison framework: online, uniform replay, PER, and DEER-style replay.</li>
+          <li>Daily market/portfolio environment with transaction costs.</li>
+          <li>Diagnostics for portfolio value, drawdown, turnover, mismatch rate, TD-error, priority, DoE, and S-score.</li>
+        </ul>
+      </article>
+
+      <article class="card green">
+        <h3>DEER-Style Mechanism</h3>
+        <ul>
+          <li>External regime label change creates a new boundary.</li>
+          <li>At the boundary, freeze a reference Q network snapshot as the old market belief.</li>
+          <li>After the agent starts learning the new regime, compare the new Q estimate with the frozen old Q estimate.</li>
+          <li><code>DoE(s,a) = |Q_new(s,a) - Q_old(s,a)|</code>. Intuitively, this measures how much the value of the same decision changed after the regime shift.</li>
+          <li>Use a transition-count S schedule: high DoE emphasis right after a boundary, then gradually return to TD-error refinement.</li>
+        </ul>
+      </article>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Transition Type</th>
+          <th>Replay Logic</th>
+          <th>Intuition</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Pre-boundary transitions</td>
+          <td>Lower priority when DoE is high.</td>
+          <td>If an old transition produces a very different Q estimate now, it may be stale under the current market regime.</td>
+        </tr>
+        <tr>
+          <td>Post-boundary transitions</td>
+          <td>Mix TD-error and DoE using S.</td>
+          <td>Right after a shift, focus on transitions that reveal the new environment; later, return to normal TD-error learning.</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <div class="section-title">
+      <div class="num">04</div>
+      <div>
+        <h2>Validation Principle: Why Should This Mechanism Be Useful?</h2>
+        <p class="lead">We need two layers of evidence: portfolio backtest results and replay-mechanism diagnostics.</p>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <article class="card green">
+        <h3>Layer A: Portfolio-Level Results</h3>
+        <p>This is the main evidence because financial reviewers care about whether the mechanism improves trading behavior under realistic costs.</p>
+        <ul>
+          <li>Final portfolio value / cumulative return.</li>
+          <li>Sharpe ratio and Sortino ratio.</li>
+          <li>Maximum drawdown and drawdown duration.</li>
+          <li>Turnover and transaction-cost robustness.</li>
+          <li>Post-regime-shift recovery speed.</li>
+        </ul>
+      </article>
+
+      <article class="card blue">
+        <h3>Layer B: Mechanism-Level Diagnostics</h3>
+        <p>This is what makes the project more than a trading-system comparison.</p>
+        <ul>
+          <li>Replay mismatch rate: current regime vs sampled transition regime.</li>
+          <li>Sample age and regime distribution inside batches.</li>
+          <li>Priority distribution before/after regime switches.</li>
+          <li>Correlation between mismatch and TD-error, drawdown, or reward instability.</li>
+          <li>DoE behavior around detected regime boundaries.</li>
+        </ul>
+      </article>
+    </div>
+
+    <div class="callout amber">
+      <strong>Important framing:</strong> We should not only report return. If return is noisy, but the method reliably reduces replay contamination and improves post-shift risk/recovery metrics, the mechanism is still publishable as a focused financial RL contribution.
+    </div>
+  </section>
+
+  <section>
+    <div class="section-title">
+      <div class="num">05</div>
+      <div>
+        <h2>Backtest Design Inspired by ReCAP</h2>
+        <p class="lead">ReCAP's experiments are useful because they evaluate across multiple asset universes, multiple baselines, transaction costs, risk metrics, ablations, and regime adaptation metrics.</p>
+      </div>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>ReCAP Element</th>
+          <th>What ReCAP Does</th>
+          <th>Our Adaptation</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Datasets</td>
+          <td>DOW30, NAS100, SP500, NIKKEI30, and COMMODITY_ETF; daily data from 2008-05-01 to 2025-04-29.</td>
+          <td>Start with our current DOW30/market-index data. Then add a small ETF universe such as SPY/TLT/GLD/DBC/cash. If time allows, extend to NAS100 or sector ETFs.</td>
+        </tr>
+        <tr>
+          <td>Train/test split</td>
+          <td>First 12 years for offline training; later 5 years for online evaluation.</td>
+          <td>Use chronological train/validation/test. Tune replay parameters only on validation, then report test period once.</td>
+        </tr>
+        <tr>
+          <td>Metrics</td>
+          <td>Cumulative return, Sharpe ratio, maximum drawdown; also continual-learning metrics such as average performance, forgetting, and forward transfer.</td>
+          <td>Primary: cumulative return, Sharpe/Sortino, MDD, turnover, transaction-cost-adjusted return. Secondary: post-boundary recovery, worst-regime loss, replay mismatch.</td>
+        </tr>
+        <tr>
+          <td>Baselines</td>
+          <td>Rule-based portfolio methods, RL methods such as A2C/PPO/SAC/EIIE/SARL/Cross-Insight/AlphaGAT, and continual learning baselines such as retraining, finetuning, ER, EWC, CoR.</td>
+          <td>For our scope: online DQN, uniform replay, PER, sliding-window replay, and DEER-style replay.</td>
+        </tr>
+        <tr>
+          <td>Ablations</td>
+          <td>w/o adaptive regime detection, w/o policy library, w/o regime gate; sensitivity to ARD parameters; HMM replacement; +5 bps and +10 bps cost settings.</td>
+          <td>No DoE, no S schedule, random boundaries, shuffled regime labels, raw vs normalized DoE, different labelers, 0/5/10 bps costs.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="small">
+      ReCAP source used for this summary: arXiv:2606.00143, especially Sections 4-5 on ARD, policy library, datasets, baselines, metrics, ablations, and transaction-cost sensitivity.
+    </div>
+  </section>
+
+  <section>
+    <div class="section-title">
+      <div class="num">06</div>
+      <div>
+        <h2>Experiment Roadmap and Priority</h2>
+        <p class="lead">The order matters. We should first prove the trading environment and baseline are meaningful, then test whether replay behavior changes, then test whether it improves portfolio outcomes.</p>
+      </div>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Priority</th>
+          <th>Experiment</th>
+          <th>Question Answered</th>
+          <th>Success Signal</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span class="priority p1">Main 1</span></td>
+          <td>DQN replay backtest on DOW30 or ETF universe with 5-10 seeds.</td>
+          <td>Does DEER-style or regime-aware replay improve portfolio behavior under transaction costs?</td>
+          <td>Better median MDD/recovery/Sharpe or final value than PER/uniform, without extreme turnover.</td>
+        </tr>
+        <tr>
+          <td><span class="priority p1">Main 2</span></td>
+          <td>Replay contamination diagnostics around regime boundaries.</td>
+          <td>Does standard replay sample stale or mismatched transitions after shifts?</td>
+          <td>Uniform/PER have higher mismatch; our method lowers mismatch and changes priority composition as designed.</td>
+        </tr>
+        <tr>
+          <td><span class="priority p2">Main 3</span></td>
+          <td>Post-shift event study.</td>
+          <td>Does the method adapt faster after regime changes?</td>
+          <td>Lower drawdown in the first 20/40/60 trading days after a boundary; faster recovery to pre-shift rolling performance.</td>
+        </tr>
+        <tr>
+          <td><span class="priority p2">Ablation</span></td>
+          <td>No DoE, no S schedule, random boundary, shuffled labels.</td>
+          <td>Which component actually matters?</td>
+          <td>True boundary + DoE + S should beat random/shuffled/no-DoE versions on mechanism metrics and at least one risk metric.</td>
+        </tr>
+        <tr>
+          <td><span class="priority p3">Robustness</span></td>
+          <td>Compare rule-based, HMM, and ReCAP-CUSUM labels.</td>
+          <td>Is the result dependent on one labeler?</td>
+          <td>Qualitatively similar replay behavior across at least two labelers.</td>
+        </tr>
+        <tr>
+          <td><span class="priority p3">Robustness</span></td>
+          <td>Transaction-cost sensitivity: 0, 5, 10 bps.</td>
+          <td>Does improvement survive realistic trading frictions?</td>
+          <td>Risk/recovery improvements remain under 10 bps; turnover is not the hidden driver.</td>
+        </tr>
+        <tr>
+          <td><span class="priority fallback">Fallback</span></td>
+          <td>Mechanism-only paper angle.</td>
+          <td>What if portfolio returns are too noisy?</td>
+          <td>Focus contribution on replay contamination diagnosis, controlled synthetic market, and financial diagnostics.</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <div class="section-title">
+      <div class="num">07</div>
+      <div>
+        <h2>Specific Experiments to Explain Better Samples</h2>
+        <p class="lead">These are the experiments that make the mechanism believable even if raw return is unstable.</p>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <article class="card blue">
+        <h3>Sample Quality Test</h3>
+        <ul>
+          <li>For each minibatch, log regime distribution, sample age, TD-error, DoE, and realized next-period reward.</li>
+          <li>Compare whether our sampler selects more current-relevant or low-staleness transitions after boundaries.</li>
+          <li>Report batch-level statistics before and after each regime shift.</li>
+        </ul>
+      </article>
+
+      <article class="card green">
+        <h3>Counterfactual Replay Test</h3>
+        <ul>
+          <li>Keep the same DQN, same environment, same seeds, and same training steps.</li>
+          <li>Only change the replay sampler: uniform, PER, sliding-window, and DEER-style.</li>
+          <li>If results differ, the difference is more attributable to replay rather than model architecture.</li>
+        </ul>
+      </article>
+
+      <article class="card amber">
+        <h3>Boundary Event Study</h3>
+        <ul>
+          <li>Align all detected regime boundaries at day 0.</li>
+          <li>Plot average MDD, reward, turnover, and portfolio value from day -20 to day +60.</li>
+          <li>The desired effect is smaller post-boundary loss and faster recovery.</li>
+        </ul>
+      </article>
+
+      <article class="card red">
+        <h3>Negative Controls</h3>
+        <ul>
+          <li>Use random boundaries with the same number of switches.</li>
+          <li>Shuffle regime labels while preserving label frequencies.</li>
+          <li>If performance remains the same, then our labels are not carrying useful regime information.</li>
+        </ul>
+      </article>
+    </div>
+  </section>
+</main>
+</body>
+</html>

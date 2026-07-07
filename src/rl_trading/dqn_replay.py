@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 import json
 import math
+import os
 import random
 
 import numpy as np
@@ -14,6 +15,7 @@ from torch import nn
 import torch.nn.functional as F
 
 from src.regime_labeling.features import MarketFeatureConfig, build_market_features
+from src.rl_trading.policy_safety import apply_policy_safety, normalize_long_only, safety_config_from_object
 
 
 @dataclass
@@ -27,6 +29,15 @@ class ExperimentConfig:
     primary_symbol: str = "SPY"
 
     transaction_cost_bps: float = 10.0
+    safety_enabled: bool = True
+    safety_min_cash_weight: float = 0.03
+    safety_max_asset_weight: float = 0.85
+    safety_max_turnover: float = 0.75
+    safety_regime_blend: float = 0.20
+    safety_risk_on_cash: float = 0.05
+    safety_sideways_cash: float = 0.25
+    safety_high_vol_cash: float = 0.55
+    safety_risk_off_cash: float = 0.70
 
     # Methods:
     # online  = DQN-only / no replay
@@ -40,6 +51,7 @@ class ExperimentConfig:
     buffer_size: int = 50000
     batch_size: int = 64
     warmup_steps: int = 256
+    max_steps: int = 0
 
     gamma: float = 0.99
     lr: float = 1e-3
@@ -266,6 +278,7 @@ class MarketDQNEnv:
         self.state_dim = len(self.feature_cols) + self.n_actions
 
         self.cost_rate = cfg.transaction_cost_bps / 10000.0
+        self.safety_config = safety_config_from_object(cfg)
         self.reset()
 
     def _make_actions(self) -> tuple[list[np.ndarray], list[str]]:
@@ -292,9 +305,15 @@ class MarketDQNEnv:
         self.t = 0
         self.prev_action = 0
         self.prev_weights = self.actions[0].copy()
+        self.prev_full_weights = self._full_weights_from_asset_weights(self.prev_weights)
         self.portfolio_value = 1.0
         self.peak_value = 1.0
         return self._state()
+
+    def _full_weights_from_asset_weights(self, asset_weights: np.ndarray) -> np.ndarray:
+        assets = np.asarray(asset_weights, dtype=np.float32).reshape(-1)
+        cash = max(0.0, 1.0 - float(np.sum(np.maximum(assets, 0.0))))
+        return normalize_long_only(np.concatenate([[cash], assets]).astype(np.float32))
 
     def _state(self) -> np.ndarray:
         row = self.df.iloc[self.t]
@@ -314,8 +333,16 @@ class MarketDQNEnv:
         done = next_t >= len(self.df) - 1
 
         next_row = self.df.iloc[next_t]
-        new_weights = self.actions[action]
-        turnover = float(np.abs(new_weights - self.prev_weights).sum())
+        proposed_full_weights = self._full_weights_from_asset_weights(self.actions[action])
+        guarded_full_weights, safety_info = apply_policy_safety(
+            proposed_weights=proposed_full_weights,
+            previous_weights=self.prev_full_weights,
+            regime_label=int(current["regime_label"]),
+            regime_name=str(current["regime_name"]),
+            cfg=self.safety_config,
+        )
+        new_weights = guarded_full_weights[1:]
+        turnover = float(np.abs(guarded_full_weights - self.prev_full_weights).sum())
 
         asset_returns = np.array([float(next_row[f"ret_{s}"]) for s in self.symbols], dtype=np.float32)
         gross_return = float(np.dot(new_weights, asset_returns))
@@ -338,11 +365,19 @@ class MarketDQNEnv:
             "turnover": float(turnover),
             "gross_return": float(gross_return),
             "cost": float(cost),
+            "action_weights": guarded_full_weights.copy(),
+            "proposed_action_weights": proposed_full_weights.copy(),
+            **safety_info,
         }
+        for name, weight in zip(["cash", *self.symbols], guarded_full_weights):
+            info[f"weight_{name}"] = float(weight)
+        for name, weight in zip(["cash", *self.symbols], proposed_full_weights):
+            info[f"proposed_weight_{name}"] = float(weight)
 
         self.t = next_t
         self.prev_action = action
         self.prev_weights = new_weights.copy()
+        self.prev_full_weights = guarded_full_weights.copy()
 
         return self._state(), float(reward), done, info
 
@@ -1138,11 +1173,20 @@ def run_single_experiment(cfg: ExperimentConfig) -> Path:
         "n_rows": int(len(env.df)),
         "state_dim": int(env.state_dim),
         "n_actions": int(env.n_actions),
+        "policy_safety": {
+            "enabled": bool(cfg.safety_enabled),
+            "min_cash_weight": float(cfg.safety_min_cash_weight),
+            "max_asset_weight": float(cfg.safety_max_asset_weight),
+            "max_turnover": float(cfg.safety_max_turnover),
+            "regime_blend": float(cfg.safety_regime_blend),
+        },
     }
     (output_dir / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
     state = env.reset()
     max_steps = len(env.df) - 2
+    if cfg.max_steps > 0:
+        max_steps = min(max_steps, int(cfg.max_steps))
 
     trade_logs: list[dict[str, Any]] = []
     replay_logs: list[dict[str, Any]] = []
@@ -1222,6 +1266,15 @@ def run_single_experiment(cfg: ExperimentConfig) -> Path:
                 "gross_return": info["gross_return"],
                 "cost": info["cost"],
                 "epsilon": eps,
+                "safety_blend": info["safety_blend"],
+                "safety_turnover_before_cap": info["safety_turnover_before_cap"],
+                "safety_turnover_after_cap": info["safety_turnover_after_cap"],
+                "safety_anchor_cash": info["safety_anchor_cash"],
+                **{f"weight_{name}": info[f"weight_{name}"] for name in ["cash", *env.symbols]},
+                **{
+                    f"proposed_weight_{name}": info[f"proposed_weight_{name}"]
+                    for name in ["cash", *env.symbols]
+                },
             }
         )
 
@@ -1406,6 +1459,13 @@ def run_single_experiment(cfg: ExperimentConfig) -> Path:
         "max_drawdown": float(trade_df["drawdown"].max()),
         "mean_turnover": float(trade_df["turnover"].mean()),
         "mean_reward": float(trade_df["reward"].mean()),
+        "mean_cash_weight": float(trade_df["weight_cash"].mean()),
+        "mean_proposed_cash_weight": float(trade_df["proposed_weight_cash"].mean()),
+        "mean_safety_turnover_cap_delta": float(
+            (trade_df["safety_turnover_before_cap"] - trade_df["safety_turnover_after_cap"]).mean()
+        ),
+        "safety_enabled": bool(cfg.safety_enabled),
+        "safety_regime_blend": cfg.safety_regime_blend,
         "mean_mismatch_rate": mean_mismatch_rate,
         "mean_td_error": mean_td_error,
         "mean_priority": mean_priority,
@@ -1639,6 +1699,9 @@ def analyze_mechanism_outputs(output_root: str, label_method: str) -> None:
 def make_plots(output_root: str, label_method: str, replays: list[str], seeds: list[int], deer_initial_priority: str = "max") -> None:
     analysis_dir = Path(output_root) / "analysis"
     analysis_dir.mkdir(parents=True, exist_ok=True)
+    mpl_config_dir = analysis_dir / "mplconfig"
+    mpl_config_dir.mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault("MPLCONFIGDIR", str(mpl_config_dir))
 
     try:
         import matplotlib.pyplot as plt
