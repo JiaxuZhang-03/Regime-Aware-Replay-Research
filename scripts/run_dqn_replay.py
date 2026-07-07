@@ -91,6 +91,9 @@ def main() -> None:
     parser.add_argument("--deer-scale-rho", type=float, default=0.9)
     parser.add_argument("--deer-scale-floor", type=float, default=1e-8)
     parser.add_argument("--deer-min-post-samples", type=int, default=4)
+    parser.add_argument("--deer-initial-priority", choices=["max", "median", "doe"], default="max")
+    parser.add_argument("--mechanism-probe-size", type=int, default=128)
+    parser.add_argument("--mechanism-event-horizon", type=int, default=60)
 
     args = parser.parse_args()
 
@@ -149,6 +152,9 @@ def main() -> None:
             deer_scale_rho=args.deer_scale_rho,
             deer_scale_floor=args.deer_scale_floor,
             deer_min_post_samples=args.deer_min_post_samples,
+            deer_initial_priority=args.deer_initial_priority,
+            mechanism_probe_size=args.mechanism_probe_size,
+            mechanism_event_horizon=args.mechanism_event_horizon,
         )
 
         summaries.append(
