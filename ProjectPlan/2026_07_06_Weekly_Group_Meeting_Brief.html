@@ -1,0 +1,505 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>本周组会汇报 - Synthetic Market and Next Tasks</title>
+  <style>
+    :root {
+      --bg: #eef2f6;
+      --paper: #ffffff;
+      --ink: #142033;
+      --muted: #5d6b7c;
+      --line: #d8e0ea;
+      --soft: #f7f9fc;
+      --blue: #1d4ed8;
+      --green: #0f766e;
+      --amber: #a16207;
+      --red: #b91c1c;
+      --purple: #6d28d9;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Segoe UI", Arial, "Microsoft YaHei", sans-serif;
+      line-height: 1.6;
+      font-size: 16px;
+    }
+
+    main {
+      width: min(1180px, calc(100% - 32px));
+      margin: 28px auto;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 14px 42px rgba(31, 41, 55, 0.08);
+      overflow: hidden;
+    }
+
+    header {
+      padding: 32px 38px;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(90deg, #f8fafc, #eefdf8);
+    }
+
+    h1 {
+      margin: 0 0 10px;
+      font-size: 32px;
+      line-height: 1.18;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin: 0 0 14px;
+      font-size: 24px;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 0 0 8px;
+      font-size: 18px;
+      letter-spacing: 0;
+    }
+
+    p { margin: 8px 0; }
+
+    section {
+      padding: 28px 38px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    section:last-child { border-bottom: 0; }
+
+    ul {
+      margin: 8px 0 8px 22px;
+      padding: 0;
+    }
+
+    li { margin: 5px 0; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 14px 0;
+      font-size: 14px;
+    }
+
+    th, td {
+      border: 1px solid var(--line);
+      padding: 10px 11px;
+      vertical-align: top;
+      text-align: left;
+    }
+
+    th {
+      background: var(--soft);
+      font-weight: 700;
+    }
+
+    code {
+      font-family: Consolas, "Courier New", monospace;
+      background: #f1f5f9;
+      padding: 1px 5px;
+      border-radius: 4px;
+    }
+
+    .meta {
+      color: var(--muted);
+      max-width: 880px;
+      font-size: 16px;
+    }
+
+    .tag-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 18px;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 4px 9px;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      background: #ffffff;
+      color: #334155;
+      font-size: 13px;
+      font-weight: 650;
+    }
+
+    .lead {
+      color: var(--muted);
+      max-width: 900px;
+      font-size: 17px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+      margin-top: 16px;
+    }
+
+    .grid.two {
+      grid-template-columns: repeat(2, 1fr);
+    }
+
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px 18px;
+      background: #ffffff;
+      border-top: 4px solid var(--blue);
+    }
+
+    .card.green { border-top-color: var(--green); }
+    .card.amber { border-top-color: var(--amber); }
+    .card.red { border-top-color: var(--red); }
+    .card.purple { border-top-color: var(--purple); }
+
+    .level {
+      display: grid;
+      grid-template-columns: 110px 1fr;
+      gap: 16px;
+      padding: 16px 0;
+      border-top: 1px solid var(--line);
+    }
+
+    .level:first-of-type { border-top: 0; }
+
+    .badge {
+      width: 88px;
+      height: 38px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 6px;
+      color: #ffffff;
+      background: var(--blue);
+      font-weight: 750;
+      font-size: 15px;
+    }
+
+    .badge.green { background: var(--green); }
+    .badge.amber { background: var(--amber); }
+    .badge.red { background: var(--red); }
+    .badge.purple { background: var(--purple); }
+
+    .callout {
+      margin-top: 16px;
+      padding: 14px 16px;
+      border-left: 5px solid var(--blue);
+      background: #eff6ff;
+      border-radius: 6px;
+    }
+
+    .callout.green {
+      border-left-color: var(--green);
+      background: #ecfdf5;
+    }
+
+    .callout.amber {
+      border-left-color: var(--amber);
+      background: #fffbeb;
+    }
+
+    .compact-list li {
+      margin: 4px 0;
+    }
+
+    .footer {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    @media (max-width: 860px) {
+      main {
+        width: calc(100% - 18px);
+        margin: 10px auto;
+      }
+      header, section {
+        padding: 22px 20px;
+      }
+      .grid, .grid.two {
+        grid-template-columns: 1fr;
+      }
+      .level {
+        grid-template-columns: 1fr;
+        gap: 8px;
+      }
+      h1 { font-size: 26px; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>本周组会汇报</h1>
+    <p class="meta">Synthetic market 阶段进展，以及下一阶段 regime-aware replay 项目的任务分配。</p>
+    <div class="tag-row">
+      <span class="tag">合成市场 Synthetic Market</span>
+      <span class="tag">SAC / Replay</span>
+      <span class="tag">DEER-style 机制</span>
+      <span class="tag">下周任务</span>
+    </div>
+  </header>
+
+  <section>
+    <h2>1. 当前项目位置 <span class="meta">/ Current Position</span></h2>
+    <p class="lead">
+      目前的目标还不是直接证明 trading strategy 能稳定盈利，而是先建立一个可控的 benchmark，把三个问题拆开判断：
+    </p>
+    <div class="grid">
+      <article class="card">
+        <h3>Base RL 是否可用</h3>
+        <p>SAC / DQN 能不能在简单 market signal 下学出非退化的 portfolio policy？</p>
+      </article>
+      <article class="card green">
+        <h3>Replay 机制是否生效</h3>
+        <p>Regime shift 后，replay method 是否真的改变了被抽样的 transitions？</p>
+      </article>
+      <article class="card amber">
+        <h3>Evaluation 流程是否清楚</h3>
+        <p>即使 final portfolio return 很 noisy，我们能不能测量 replay 本身的作用？</p>
+      </article>
+    </div>
+    <div class="callout">
+      <strong>核心定位：</strong>Synthetic market 是 diagnostic environment。它的作用是先检查 regime-aware replay 的行为是否合理，再进入更噪声的真实市场 backtest。
+    </div>
+  </section>
+
+  <section>
+    <h2>2. Synthetic Market 设计</h2>
+    <p class="lead">
+      我们现在已经搭好了一个 progressive synthetic market generator。每一层 level 都增加一种 non-stationarity，这样可以更清楚地判断 replay-aware methods 在什么情况下开始有意义。
+    </p>
+    <p>
+      当前环境使用 synthetic stocks <code>SYN0</code> 到 <code>SYN4</code>。每日收益由 regime-dependent Gaussian distribution 生成：
+    </p>
+    <p><code>r_t | z_t = k ~ N(mu_k, Sigma_k)</code></p>
+    <ul class="compact-list">
+      <li><code>z_t</code>: hidden market regime。</li>
+      <li><code>mu_k</code>: 每个 regime 下的 expected return。</li>
+      <li><code>Sigma_k</code>: 每个 regime 下的 volatility 和 correlation structure。</li>
+      <li>SAC 不直接看到 true regime；replay labels 可以使用 oracle labels，也可以使用 estimated labels。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>3. 合成市场难度层级 <span class="meta">/ Progressive Levels</span></h2>
+
+    <div class="level">
+      <div><span class="badge">Level 0</span></div>
+      <div>
+        <h3>Stationary Market：无 regime shift</h3>
+        <p>所有 returns 都来自一个固定分布。</p>
+        <ul>
+          <li>目的：sanity check。</li>
+          <li>预期：regime-aware replay 和 DEER 不应该凭空产生优势。</li>
+          <li>发现：修复 DEER fallback bug 后，在没有 boundary 时，DEER 会正确退化成 PER-like behavior。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="level">
+      <div><span class="badge green">Level 1</span></div>
+      <div>
+        <h3>Two-Regime Mean Shift：只改变均值</h3>
+        <p>两个 regimes：bull 和 bear。只有 expected returns 改变。</p>
+        <ul>
+          <li>Bull：大多数股票 expected returns 为正。</li>
+          <li>Bear：大多数股票 expected returns 为负。</li>
+          <li>目的：测试旧 regime 的 return-direction experience 是否会拖慢 adaptation。</li>
+          <li>发现：regime replay 明显降低 mismatch；DEER 在短跑 smoke test 中 final value 更好，但还不能当正式结论。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="level">
+      <div><span class="badge amber">Level 2</span></div>
+      <div>
+        <h3>Mean + Volatility Shift：均值和波动率一起变</h3>
+        <p>不同 regimes 下 expected return 和 volatility 都改变。</p>
+        <ul>
+          <li>Bull：positive mean，lower volatility。</li>
+          <li>Bear：negative mean，higher volatility。</li>
+          <li>目的：测试 agent 是否能同时适应 return 和 risk 的变化。</li>
+          <li>发现：regime replay 仍然降低 mismatch；但 portfolio-level improvement 不稳定，说明 risk structure 改变后 base RL 更重要。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="level">
+      <div><span class="badge purple">Level 3</span></div>
+      <div>
+        <h3>Mean + Volatility + Correlation Shift：加入相关性变化</h3>
+        <p>Expected return、volatility 和 cross-stock correlation 都随 regime 改变。</p>
+        <ul>
+          <li>Bull：lower volatility and lower correlation。</li>
+          <li>Bear：higher volatility and higher correlation。</li>
+          <li>目的：让 benchmark 更接近 portfolio problem，因为 diversification benefit 会随 regime 改变。</li>
+          <li>发现：smoke test 中 equal-weight buy-and-hold 强于 SAC，所以 base RL performance 是当前瓶颈。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="level">
+      <div><span class="badge red">Level 4</span></div>
+      <div>
+        <h3>Rare Crisis Regime：加入罕见危机状态</h3>
+        <p>加入低概率 crisis state，特征是 severe negative returns、high volatility、high correlation。</p>
+        <ul>
+          <li>Regimes：bull、bear、crisis。</li>
+          <li>目的：测试 rare but important regime 下的 adaptation 和 drawdown behavior。</li>
+          <li>发现：SAC 仍然弱于 buy-and-hold；replay diagnostics 仍然有用，但 return comparison 还不可靠。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="level">
+      <div><span class="badge">Level 5</span></div>
+      <div>
+        <h3>Hidden / Estimated Regime：用估计标签替代真实标签</h3>
+        <p>Underlying market 仍然是 Level 4，但 replay labels 可以来自 estimated regime methods。</p>
+        <ul>
+          <li>Oracle labels：true synthetic regime。</li>
+          <li>Estimated labels：HMM 和 ReCAP-CUSUM。</li>
+          <li>目的：接近真实金融数据，因为真实 regime 在现实里不可观测。</li>
+          <li>发现：normal-length test 中 DEER 略好于 Uniform/PER，但所有 SAC variants 都明显弱于 buy-and-hold。这说明在做强 return claim 前，base RL 必须先提升。</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>4. 当前发现 <span class="meta">/ Current Findings</span></h2>
+    <table>
+      <thead>
+        <tr>
+          <th>发现</th>
+          <th>解释</th>
+          <th>下一步含义</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Regime-aware replay 稳定降低 mismatch。</td>
+          <td>Sampler 至少在机制上确实改变了抽样分布。</td>
+          <td>Mismatch reduction 可以作为 mechanism metric。</td>
+        </tr>
+        <tr>
+          <td>Uniform 和 PER 的 portfolio results 经常很接近。</td>
+          <td>PER 是 active 的，但 TD-error priority 目前没有明显改变 portfolio-level outcome。</td>
+          <td>不能只看 final return，需要 replay diagnostics。</td>
+        </tr>
+        <tr>
+          <td>DEER-style replay 目前还比较简单。</td>
+          <td>当前 DoE、scale、boundary handling 可能还不够 sharp。</td>
+          <td>应该先在 synthetic market 上调整 replay design。</td>
+        </tr>
+        <tr>
+          <td>Base SAC 在困难 levels 上弱于 equal-weight buy-and-hold。</td>
+          <td>Base model 仍然是主要瓶颈。</td>
+          <td>Performance tuning 需要和 replay design 并行推进。</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="callout amber">
+      <strong>主要结论：</strong>Synthetic market setup 已经有用，但当前结果主要应解释为 mechanism diagnostics，而不是最终 trading-performance evidence。
+    </div>
+  </section>
+
+  <section>
+    <h2>5. 下周任务分配 <span class="meta">/ Task Allocation</span></h2>
+    <p class="lead">
+      下周重点是把 base RL 问题和 replay mechanism 问题拆开，不要所有东西一起调。
+    </p>
+
+    <div class="grid">
+      <article class="card green">
+        <h3>Lyra：Replay Design</h3>
+        <p><strong>目标：</strong>让 replay mechanism 更合理，并且和 PER 有更清楚的区别。</p>
+        <ul>
+          <li>思考 post-boundary sampling 怎么从 new-regime exploration 过渡到 stable replay。</li>
+          <li>比较 DoE scale 方案：fixed scale、rolling MAD scale、rank-based DoE。</li>
+          <li>加入 diversity control，避免 replay 被少数 high-priority noisy samples 垄断。</li>
+          <li>检查 high-DoE / high-priority samples 是否真的靠近 regime boundaries 或信息更强的区间。</li>
+          <li>优先用 synthetic Level 4/5 作为 replay behavior benchmark。</li>
+        </ul>
+        <p><strong>简单交付：</strong>一张表，对比几个 DEER-style settings 下的 replay diagnostics。</p>
+      </article>
+
+      <article class="card amber">
+        <h3>Jiaxu：Base RL Performance</h3>
+        <p><strong>目标：</strong>先让 base policy 不那么容易学废，再看 replay comparison。</p>
+        <ul>
+          <li>先固定 Uniform replay，再调 reward scale、transaction cost、action behavior 和 training stability。</li>
+          <li>检查 policy 是否塌缩到 cash、equal-weight、single asset 或 excessive turnover。</li>
+          <li>记录 reward scale、Q-value scale、actor/critic losses 和 action distribution。</li>
+          <li>先用简单的 synthetic Level 1/2 验证，再判断 Level 4/5。</li>
+        </ul>
+        <p><strong>简单交付：</strong>一份 stability report，说明 SAC 是否能学出 non-degenerate behavior。</p>
+      </article>
+
+      <article class="card purple">
+        <h3>我的任务：Evaluation Pipeline</h3>
+        <p><strong>目标：</strong>把 replay effect 的评估流程标准化。</p>
+        <ul>
+          <li>建立每次 experiment run 都能复用的 report format。</li>
+          <li>把 portfolio metrics 和 replay-mechanism metrics 放在同一份 output 里。</li>
+          <li>区分哪些实验是 valid，哪些被 weak base RL 卡住，哪些只是 diagnostic。</li>
+          <li>准备 portfolio value、regime mismatch、sample age、priority、DoE、post-boundary recovery 的图。</li>
+        </ul>
+        <p><strong>简单交付：</strong>一个可复用的 experiment summary template。</p>
+      </article>
+    </div>
+  </section>
+
+  <section>
+    <h2>6. 本周推进原则 <span class="meta">/ This Week's Decision</span></h2>
+    <p class="lead">
+      不要同时优化所有部分。最清楚的推进方式是一次固定一层，再检查另一层。
+    </p>
+    <table>
+      <thead>
+        <tr>
+          <th>层次</th>
+          <th>本周要回答的问题</th>
+          <th>不要过度解释</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Base RL</td>
+          <td>Policy 能否在简单 synthetic market 中避免 degenerate behavior？</td>
+          <td>SAC 弱不等于 replay 没用。</td>
+        </tr>
+        <tr>
+          <td>Replay</td>
+          <td>DEER-style replay 能否在 regime shift 后产生可解释的 sampling behavior？</td>
+          <td>Replay diagnostics 更好不自动等于 return 更高。</td>
+        </tr>
+        <tr>
+          <td>Evaluation</td>
+          <td>我们能否稳定测量 adaptation、mismatch 和 replay concentration？</td>
+          <td>Final value 太 noisy，不能作为唯一指标。</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="callout green">
+      <strong>本周判断标准：</strong>一个有用的实验，应该能告诉我们失败来自 base RL、replay design，还是 evaluation metric。
+    </div>
+  </section>
+
+  <section class="footer">
+    <p>File: <code>ProjectPlan/2026_07_06_Weekly_Group_Meeting_Brief.html</code></p>
+  </section>
+</main>
+</body>
+</html>
