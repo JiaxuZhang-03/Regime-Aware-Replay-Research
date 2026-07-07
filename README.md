@@ -117,6 +117,35 @@ python scripts/run_dqn_replay.py --deer-min-post-samples 4
 This forces each DEER replay batch to include up to 4 current-boundary post
 samples when available, then fills the rest of the batch with PER sampling.
 
+## Run Mechanism Experiments
+
+The recommended first experiment uses rule-based boundaries, all four baselines,
+and three seeds:
+
+```bash
+python scripts/run_dqn_replay.py \
+  --label-method rule_based \
+  --replays online,uniform,per,deer \
+  --seeds 0,1,2
+```
+
+Every run writes `mechanism_events.csv` (fixed-probe Q drift, action flips,
+Q-margin change, action distributions, and TD-error shock) and replay methods
+also write `transition_diagnostics.csv` (per-transition sampling, priority,
+DoE, TD-error, age, boundary, reward, volatility, and action statistics).
+Aggregated tables are written under `outputs/dqn_replay/analysis/`:
+
+- `rule_based_boundary_aligned_curves.csv`
+- `rule_based_boundary_summary.csv`
+- `rule_based_high_low_comparison.csv`
+- `rule_based_replay_concentration.csv`
+
+Run the initial-priority ablation with separate, persistent run directories:
+
+```bash
+python scripts/run_dqn_replay.py --label-method rule_based --replays deer --deer-initial-priority max
+python scripts/run_dqn_replay.py --label-method rule_based --replays deer --deer-initial-priority median
+python scripts/run_dqn_replay.py --label-method rule_based --replays deer --deer-initial-priority doe
 ## Run SAC Replay
 
 The DQN runner uses a small discrete action set. The SAC runner changes the

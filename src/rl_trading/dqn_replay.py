@@ -89,6 +89,12 @@ class ExperimentConfig:
     deer_scale_rho: float = 0.9
     deer_scale_floor: float = 1e-8
     deer_min_post_samples: int = 4
+    deer_initial_priority: str = "max"  # max, median, or doe
+
+    # Mechanism experiment diagnostics.
+    mechanism_probe_size: int = 128
+    mechanism_event_horizon: int = 60
+    mechanism_recovery_fraction: float = 1.25
 
 
 def set_seed(seed: int) -> None:
@@ -393,6 +399,13 @@ class ReplayBuffer:
         return len(self.storage)
 
     def add(self, item: dict[str, Any]) -> None:
+        item.setdefault("sample_count", 0)
+        item.setdefault("priority_update_count", 0)
+        item.setdefault("last_sample_step", -1)
+        item.setdefault("last_priority_update_step", -1)
+        item.setdefault("priority_sum", 0.0)
+        item.setdefault("priority_observations", 0)
+        item.setdefault("max_priority", float("nan"))
         if len(self.storage) < self.capacity:
             self.storage.append(item)
         else:
@@ -411,8 +424,46 @@ class ReplayBuffer:
         idx = self.rng.choice(n, size=batch_size, replace=n < batch_size)
         weights = np.ones(len(idx), dtype=np.float32)
         batch = self._pack(idx, weights)
+        self._record_samples(idx, current_step)
         batch["sample_sources"] = np.array(["uniform"] * len(idx), dtype=object)
         return batch
+
+    def _record_samples(self, indices: np.ndarray, current_step: int | None) -> None:
+        for i in np.asarray(indices, dtype=np.int64):
+            rec = self.storage[int(i)]
+            rec["sample_count"] += 1
+            rec["last_sample_step"] = -1 if current_step is None else int(current_step)
+
+    def transition_diagnostics(self, final_step: int) -> pd.DataFrame:
+        rows = []
+        for rec in self.storage:
+            n_priority = int(rec.get("priority_observations", 0))
+            rows.append({
+                "transition_id": int(rec.get("transition_id", rec["time_index"])),
+                "date": rec["date"], "time_index": int(rec["time_index"]),
+                "sample_age": int(final_step - rec["time_index"]),
+                "regime_label": int(rec["regime_label"]),
+                "regime_name": rec.get("regime_name", ""),
+                "boundary_id": int(rec.get("boundary_id", 0)),
+                "distance_to_boundary": int(rec.get("distance_to_boundary", 0)),
+                "action": int(rec["action"]), "reward": float(rec["reward"]),
+                "reward_magnitude": abs(float(rec["reward"])),
+                "return_sign": int(np.sign(rec["reward"])),
+                "position_changed": bool(rec.get("position_changed", False)),
+                "next_day_return": float(rec.get("next_day_return", np.nan)),
+                "volatility": float(rec.get("volatility", np.nan)),
+                "sample_count": int(rec.get("sample_count", 0)),
+                "priority_update_count": int(rec.get("priority_update_count", 0)),
+                "last_sample_step": int(rec.get("last_sample_step", -1)),
+                "last_priority_update_step": int(rec.get("last_priority_update_step", -1)),
+                "mean_priority": float(rec.get("priority_sum", 0.0)) / max(n_priority, 1),
+                "max_priority": float(rec.get("max_priority", np.nan)),
+                "mean_doe": float(rec.get("doe_sum", 0.0)) / max(int(rec.get("doe_observations", 0)), 1),
+                "mean_td_error": float(rec.get("td_sum", 0.0)) / max(int(rec.get("td_observations", 0)), 1),
+                "final_priority": float(rec.get("priority", np.nan)),
+                "initial_priority": float(rec.get("initial_priority", np.nan)),
+            })
+        return pd.DataFrame(rows)
 
     def _pack(self, idx: np.ndarray, weights: np.ndarray) -> dict[str, Any]:
         batch = [self.storage[int(i)] for i in idx]
@@ -445,7 +496,10 @@ class PERBuffer(ReplayBuffer):
     def add(self, item: dict[str, Any]) -> None:
         insert_pos = self.pos
         super().add(item)
-        self.priorities[insert_pos] = self.max_priority
+        initial = float(item.get("initial_priority", self.max_priority))
+        self.priorities[insert_pos] = max(initial, self.eps)
+        item["initial_priority"] = float(self.priorities[insert_pos])
+        item["priority"] = float(self.priorities[insert_pos])
 
     def sample(
         self,
@@ -465,15 +519,25 @@ class PERBuffer(ReplayBuffer):
         weights = weights / max(weights.max(), 1e-12)
 
         batch = self._pack(idx, weights.astype(np.float32))
+        self._record_samples(idx, current_step)
         batch["priorities"] = p[idx].astype(np.float32)
         batch["sample_probs"] = probs[idx].astype(np.float32)
         batch["sample_sources"] = np.array(["per"] * len(idx), dtype=object)
         return batch
 
-    def update_priorities(self, indices: np.ndarray, td_errors: np.ndarray) -> None:
+    def update_priorities(self, indices: np.ndarray, td_errors: np.ndarray, current_step: int | None = None) -> None:
         new_p = np.abs(td_errors).astype(np.float32) + self.eps
         self.priorities[indices] = new_p
         self.max_priority = max(self.max_priority, float(new_p.max()))
+        for j, i in enumerate(np.asarray(indices, dtype=np.int64)):
+            rec = self.storage[int(i)]
+            p = float(new_p[j])
+            rec["priority"] = p
+            rec["priority_update_count"] += 1
+            rec["last_priority_update_step"] = -1 if current_step is None else int(current_step)
+            rec["priority_sum"] += p
+            rec["priority_observations"] += 1
+            rec["max_priority"] = p if np.isnan(rec["max_priority"]) else max(rec["max_priority"], p)
 
 
 class RegimeAwareReplayBuffer(PERBuffer):
@@ -581,6 +645,7 @@ class RegimeAwareReplayBuffer(PERBuffer):
         weights = np.ones(len(idx), dtype=np.float32)
 
         batch = self._pack(idx, weights)
+        self._record_samples(idx, current_step)
         batch["priorities"] = priorities[idx].astype(np.float32)
         batch["sample_probs"] = priority_probs[idx].astype(np.float32)
 
@@ -717,6 +782,7 @@ class DEERReplayBuffer(PERBuffer):
         weights = weights / max(weights.max(), 1e-12)
 
         batch = self._pack(idx, weights.astype(np.float32))
+        self._record_samples(idx, current_step)
         batch["priorities"] = priorities[idx].astype(np.float32)
         batch["sample_probs"] = global_probs[idx].astype(np.float32)
         batch["sample_sources"] = sources
@@ -755,6 +821,7 @@ class DEERReplayBuffer(PERBuffer):
         doe_values: np.ndarray,
         current_boundary: int,
         s_score: float,
+        current_step: int | None = None,
     ) -> dict[str, np.ndarray | float]:
         cfg = self.cfg
         idx = np.asarray(indices, dtype=np.int64)
@@ -804,6 +871,16 @@ class DEERReplayBuffer(PERBuffer):
             rec["priority"] = float(new_p[j])
             rec["deer_is_post_change"] = bool(post[j])
             rec["deer_s_score"] = float(s_score)
+            rec["priority_update_count"] += 1
+            rec["last_priority_update_step"] = -1 if current_step is None else int(current_step)
+            rec["priority_sum"] += float(new_p[j])
+            rec["priority_observations"] += 1
+            rec["max_priority"] = (float(new_p[j]) if np.isnan(rec["max_priority"])
+                                   else max(rec["max_priority"], float(new_p[j])))
+            rec["doe_sum"] = float(rec.get("doe_sum", 0.0)) + float(doe_abs[j])
+            rec["doe_observations"] = int(rec.get("doe_observations", 0)) + 1
+            rec["td_sum"] = float(rec.get("td_sum", 0.0)) + float(td_abs[j])
+            rec["td_observations"] = int(rec.get("td_observations", 0)) + 1
 
         return {
             "priority": new_p,
@@ -895,6 +972,11 @@ class DQNAgent:
             x = torch.tensor(state, dtype=torch.float32, device=self.device).unsqueeze(0)
             return int(torch.argmax(self.q(x), dim=1).item())
 
+    def q_values(self, states: np.ndarray) -> np.ndarray:
+        with torch.no_grad():
+            x = torch.tensor(states, dtype=torch.float32, device=self.device)
+            return self.q(x).cpu().numpy()
+
     def update(self, batch: dict[str, Any]) -> dict[str, Any]:
         states = torch.tensor(batch["states"], dtype=torch.float32, device=self.device)
         actions = torch.tensor(batch["actions"], dtype=torch.long, device=self.device)
@@ -928,6 +1010,25 @@ class DQNAgent:
             "td_errors": td.detach().abs().cpu().numpy(),
             "mean_q": float(q_sa.detach().mean().cpu().item()),
         }
+
+
+def probe_metrics(q_before: np.ndarray, q_after: np.ndarray) -> dict[str, Any]:
+    """Value/policy stability metrics on the exact same fixed probe states."""
+    before_actions, after_actions = q_before.argmax(axis=1), q_after.argmax(axis=1)
+    before_sorted, after_sorted = np.sort(q_before, axis=1), np.sort(q_after, axis=1)
+    margin_before = before_sorted[:, -1] - before_sorted[:, -2]
+    margin_after = after_sorted[:, -1] - after_sorted[:, -2]
+    out = {
+        "q_drift": float(np.mean(np.abs(q_after - q_before))),
+        "action_flip_rate": float(np.mean(before_actions != after_actions)),
+        "q_margin_before": float(np.mean(margin_before)),
+        "q_margin_after": float(np.mean(margin_after)),
+        "q_margin_change": float(np.mean(margin_after - margin_before)),
+    }
+    for a in range(q_before.shape[1]):
+        out[f"action_share_before_{a}"] = float(np.mean(before_actions == a))
+        out[f"action_share_after_{a}"] = float(np.mean(after_actions == a))
+    return out
 
 
 def make_online_batch(transition: dict[str, Any]) -> dict[str, Any]:
@@ -1057,7 +1158,8 @@ def run_single_experiment(cfg: ExperimentConfig) -> Path:
     buffer = make_buffer(cfg)
     agent = DQNAgent(env.state_dim, env.n_actions, cfg)
 
-    output_dir = Path(cfg.output_root) / f"{cfg.label_method}_{cfg.replay}_seed{cfg.seed}"
+    init_suffix = f"_init-{cfg.deer_initial_priority}" if cfg.replay == "deer" else ""
+    output_dir = Path(cfg.output_root) / f"{cfg.label_method}_{cfg.replay}{init_suffix}_seed{cfg.seed}"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     config_dict = cfg.__dict__.copy()
@@ -1088,6 +1190,9 @@ def run_single_experiment(cfg: ExperimentConfig) -> Path:
 
     trade_logs: list[dict[str, Any]] = []
     replay_logs: list[dict[str, Any]] = []
+    mechanism_logs: list[dict[str, Any]] = []
+    state_history: list[np.ndarray] = []
+    active_events: list[dict[str, Any]] = []
 
     # Boundary state for DEER. Boundaries are detected from external regime labels
     # before taking the action at the current state, so the first transition in a
@@ -1096,6 +1201,7 @@ def run_single_experiment(cfg: ExperimentConfig) -> Path:
     current_boundary = 0
     deer_n_new = 0
     deer_s_score = 0.0
+    boundary_start_step = 0
 
     for step in range(max_steps):
         step_regime = env.current_regime()
@@ -1105,6 +1211,17 @@ def run_single_experiment(cfg: ExperimentConfig) -> Path:
             current_regime_for_boundary = step_regime
             deer_n_new = 0
             deer_s_score = cfg.deer_s0
+            boundary_start_step = step
+            probe_states = np.stack((state_history or [state])[-max(1, cfg.mechanism_probe_size):])
+            active_events.append({
+                "boundary_id": current_boundary,
+                "boundary_step": step,
+                "old_regime": int(trade_logs[-1]["regime_label"]) if trade_logs else step_regime,
+                "new_regime": step_regime,
+                "states": probe_states,
+                "q_before": agent.q_values(probe_states),
+                "td_baseline": float(np.mean([x["mean_td_error"] for x in replay_logs[-20:]])) if replay_logs else np.nan,
+            })
             if cfg.replay == "deer":
                 agent.freeze_reference()
 
@@ -1124,6 +1241,11 @@ def run_single_experiment(cfg: ExperimentConfig) -> Path:
             "regime_name": info["regime_name"],
             "time_index": info["time_index"],
             "boundary_id": current_boundary,
+            "transition_id": step,
+            "distance_to_boundary": step - boundary_start_step,
+            "position_changed": bool(info["turnover"] > 0),
+            "next_day_return": info["gross_return"],
+            "volatility": float(env.df.iloc[info["time_index"]].get("vol", np.nan)),
         }
 
         trade_logs.append(
@@ -1182,6 +1304,11 @@ def run_single_experiment(cfg: ExperimentConfig) -> Path:
 
         else:
             assert buffer is not None
+            if isinstance(buffer, PERBuffer):
+                if cfg.deer_initial_priority == "median" and len(buffer) > 0:
+                    transition["initial_priority"] = float(np.median(buffer.priorities[:len(buffer)]))
+                elif cfg.deer_initial_priority == "doe" and cfg.replay == "deer" and current_boundary > 0:
+                    transition["initial_priority"] = float(agent.compute_q_discrepancy(make_online_batch(transition))[0] + cfg.per_eps)
             buffer.add(transition)
 
             if cfg.replay == "deer" and current_boundary > 0:
@@ -1227,6 +1354,7 @@ def run_single_experiment(cfg: ExperimentConfig) -> Path:
                         doe_values=doe_values,
                         current_boundary=current_boundary,
                         s_score=deer_s_score,
+                        current_step=step,
                     )
                     batch["doe_values"] = doe_values.astype(np.float32)
                     batch["z_td_values"] = np.asarray(deer_info["z_td"], dtype=np.float32)
@@ -1237,7 +1365,7 @@ def run_single_experiment(cfg: ExperimentConfig) -> Path:
 
                 elif cfg.replay in {"per", "regime"}:
                     assert isinstance(buffer, PERBuffer)
-                    buffer.update_priorities(batch["indices"], update["td_errors"])
+                    buffer.update_priorities(batch["indices"], update["td_errors"], current_step=step)
 
                 replay_diag = summarize_replay_batch(
                     batch=batch,
@@ -1265,15 +1393,40 @@ def run_single_experiment(cfg: ExperimentConfig) -> Path:
                 )
                 replay_logs.append(replay_diag)
 
+        current_td = replay_logs[-1]["mean_td_error"] if replay_logs and replay_logs[-1].get("step") == step else np.nan
+        for event in active_events:
+            offset = step - event["boundary_step"]
+            if 0 <= offset <= cfg.mechanism_event_horizon:
+                metrics = probe_metrics(event["q_before"], agent.q_values(event["states"]))
+                metrics.update({
+                    "step": step, "date": info["date"], "event_offset": offset,
+                    "boundary_id": event["boundary_id"], "boundary_step": event["boundary_step"],
+                    "old_regime": event["old_regime"], "new_regime": event["new_regime"],
+                    "probe_size": len(event["states"]), "td_error": current_td,
+                    "td_baseline": event["td_baseline"],
+                    "td_error_shock": current_td / max(event["td_baseline"], 1e-12) if np.isfinite(event["td_baseline"]) else np.nan,
+                })
+                mechanism_logs.append(metrics)
+        active_events = [e for e in active_events if step - e["boundary_step"] < cfg.mechanism_event_horizon]
+        state_history.append(state.copy())
+
         state = next_state
         if done:
             break
 
     trade_df = pd.DataFrame(trade_logs)
     replay_df = pd.DataFrame(replay_logs)
+    mechanism_df = pd.DataFrame(mechanism_logs)
+    if replay_df.empty:
+        replay_df = pd.DataFrame(columns=["step", "date", "mismatch_rate", "mean_td_error"])
+    if mechanism_df.empty:
+        mechanism_df = pd.DataFrame(columns=["step", "date", "event_offset", "boundary_id", "q_drift", "action_flip_rate", "q_margin_change", "td_error", "td_error_shock"])
 
     trade_df.to_csv(output_dir / "trading_log.csv", index=False)
     replay_df.to_csv(output_dir / "replay_diagnostics.csv", index=False)
+    mechanism_df.to_csv(output_dir / "mechanism_events.csv", index=False)
+    if buffer is not None:
+        buffer.transition_diagnostics(max_steps - 1).to_csv(output_dir / "transition_diagnostics.csv", index=False)
 
     if not replay_df.empty and "mismatch_rate" in replay_df.columns:
         mean_mismatch_rate = float(replay_df["mismatch_rate"].mean(skipna=True))
@@ -1359,13 +1512,191 @@ def run_many(
     summary_path = analysis_dir / f"{base_cfg.label_method}_dqn_replay_summary.csv"
     summary.to_csv(summary_path, index=False)
 
-    make_plots(base_cfg.output_root, base_cfg.label_method, replays, seeds)
+    make_plots(base_cfg.output_root, base_cfg.label_method, replays, seeds, base_cfg.deer_initial_priority)
+    analyze_mechanism_outputs(base_cfg.output_root, base_cfg.label_method)
 
     print(f"[summary] wrote {summary_path}")
     return summary
 
 
-def make_plots(output_root: str, label_method: str, replays: list[str], seeds: list[int]) -> None:
+def analyze_mechanism_outputs(output_root: str, label_method: str) -> None:
+    """Build paper-ready mechanism tables from completed runs (no plotting dependency)."""
+    root, rows, transitions, summaries_all = Path(output_root), [], [], []
+    for run in sorted(root.glob(f"{label_method}_*_seed*")):
+        meta = json.loads((run / "metadata.json").read_text(encoding="utf-8")) if (run / "metadata.json").exists() else {"config": {}}
+        cfg = meta.get("config", {})
+        common = {"run": run.name, "replay": cfg.get("replay", "unknown"), "seed": cfg.get("seed", np.nan),
+                  "initial_priority_setting": cfg.get("deer_initial_priority", "max")}
+        event_path = run / "mechanism_events.csv"
+        if event_path.exists() and event_path.stat().st_size:
+            event = pd.read_csv(event_path)
+            if not event.empty:
+                event = event.assign(**common)
+                rows.append(event)
+        transition_path = run / "transition_diagnostics.csv"
+        if transition_path.exists() and transition_path.stat().st_size:
+            trans = pd.read_csv(transition_path).assign(**common)
+            transitions.append(trans)
+        summary_path = run / "summary.csv"
+        if summary_path.exists():
+            summaries_all.append(pd.read_csv(summary_path).assign(run=run.name,
+                                                                  initial_priority_setting=common["initial_priority_setting"]))
+
+    out = root / "analysis"
+    out.mkdir(parents=True, exist_ok=True)
+    if summaries_all:
+        pd.concat(summaries_all, ignore_index=True).to_csv(
+            out / f"{label_method}_all_runs_summary.csv", index=False
+        )
+    if rows:
+        events = pd.concat(rows, ignore_index=True)
+        metric_cols = [c for c in ["q_drift", "action_flip_rate", "q_margin_before", "q_margin_after", "q_margin_change", "td_error", "td_error_shock"] if c in events]
+        metric_cols += [c for c in events if c.startswith("action_share_")]
+        curves = events.groupby(["replay", "initial_priority_setting", "event_offset"])[metric_cols].agg(["mean", "std", "count"])
+        curves.columns = ["_".join(c) for c in curves.columns]
+        curves.reset_index().to_csv(out / f"{label_method}_boundary_aligned_curves.csv", index=False)
+        summaries = []
+        for keys, group in events.groupby(["run", "boundary_id"]):
+            ordered = group.sort_values("event_offset")
+            baseline = ordered["td_baseline"].iloc[0]
+            recovered = ordered[(ordered["event_offset"] > 0) & (ordered["td_error"] <= baseline * 1.25)] if np.isfinite(baseline) else ordered.iloc[0:0]
+            summaries.append({**{c: ordered[c].iloc[0] for c in ["run", "replay", "seed", "initial_priority_setting"]},
+                              "boundary_id": keys[1], "mean_post_q_drift": ordered["q_drift"].mean(),
+                              "mean_action_flip_rate": ordered["action_flip_rate"].mean(),
+                              "max_td_error_shock": ordered["td_error_shock"].max(),
+                              "td_recovery_updates": recovered["event_offset"].iloc[0] if len(recovered) else np.nan})
+        pd.DataFrame(summaries).to_csv(out / f"{label_method}_boundary_summary.csv", index=False)
+
+    if transitions:
+        trans = pd.concat(transitions, ignore_index=True)
+        numeric = [c for c in ["sample_age", "distance_to_boundary", "mean_td_error", "reward_magnitude", "next_day_return", "volatility", "position_changed", "sample_count", "priority_update_count", "mean_priority", "max_priority", "mean_doe"] if c in trans]
+        comparisons = []
+        for run, group in trans.groupby("run"):
+            for score, label in [("mean_doe", "doe"), ("final_priority", "priority")]:
+                valid = group[np.isfinite(group[score])]
+                if len(valid) < 5:
+                    continue
+                lo, hi = valid[score].quantile([0.2, 0.8])
+                for bucket, selected in [("low_20", valid[valid[score] <= lo]), ("high_20", valid[valid[score] >= hi])]:
+                    comparisons.append({"run": run, "score": label, "group": bucket, "n": len(selected),
+                                        **{f"mean_{c}": pd.to_numeric(selected[c], errors="coerce").mean() for c in numeric}})
+        pd.DataFrame(comparisons).to_csv(out / f"{label_method}_high_low_comparison.csv", index=False)
+        concentration = []
+        for run, group in trans.groupby("run"):
+            counts = np.sort(group["sample_count"].to_numpy(dtype=float))[::-1]
+            total = counts.sum()
+            priorities = np.maximum(pd.to_numeric(group["final_priority"], errors="coerce").fillna(0).to_numpy(), 0)
+            priority_total = priorities.sum()
+            concentration.append({"run": run, **{f"top_{p}pct_share": float(counts[:max(1, math.ceil(len(counts)*p/100))].sum()/total) if total else 0.0 for p in [1, 5, 10]},
+                                  "sampling_entropy": float(-(lambda p: np.sum(p[p > 0] * np.log(p[p > 0])))(counts / total)) if total else np.nan,
+                                  "priority_entropy": float(-(lambda p: np.sum(p[p > 0] * np.log(p[p > 0])))(priorities / priority_total)) if priority_total else np.nan})
+        pd.DataFrame(concentration).to_csv(out / f"{label_method}_replay_concentration.csv", index=False)
+        trans.sort_values(["run", "sample_count"], ascending=[True, False]).groupby("run").head(100).to_csv(
+            out / f"{label_method}_top_replayed_samples.csv", index=False
+        )
+
+    # Paper-facing plots are generated from saved CSVs so analysis can be rerun
+    # without retraining the agents.
+    try:
+        import matplotlib.pyplot as plt
+    except Exception as exc:
+        print(f"[mechanism plots skipped] matplotlib unavailable: {exc}")
+        return
+
+    if rows:
+        style = events["replay"].astype(str) + events["initial_priority_setting"].map(
+            lambda x: f"-{x}" if x != "max" else ""
+        )
+        events = events.assign(method=style)
+        for metric, ylabel in [("q_drift", "Mean absolute Q drift"),
+                               ("action_flip_rate", "Action flip rate"),
+                               ("td_error_shock", "TD-error / pre-boundary baseline"),
+                               ("q_margin_change", "Q-margin change")]:
+            plt.figure(figsize=(9, 5))
+            for method, group in events.groupby("method"):
+                curve = group.groupby("event_offset")[metric].agg(["mean", "sem"]).reset_index()
+                plt.plot(curve["event_offset"], curve["mean"], label=method)
+                plt.fill_between(curve["event_offset"], curve["mean"] - curve["sem"],
+                                 curve["mean"] + curve["sem"], alpha=0.15)
+            plt.axvline(0, color="black", linestyle="--", linewidth=1)
+            plt.xlabel("Updates after regime boundary")
+            plt.ylabel(ylabel)
+            plt.legend()
+            plt.tight_layout()
+            plt.savefig(out / f"{label_method}_{metric}_around_boundaries.png", dpi=180)
+            plt.close()
+
+        action_cols = sorted(c for c in events if c.startswith("action_share_after_"))
+        if action_cols:
+            deer = events[events["replay"] == "deer"]
+            plt.figure(figsize=(9, 5))
+            for col in action_cols:
+                curve = deer.groupby("event_offset")[col].mean()
+                plt.plot(curve.index, curve.values, label=col.replace("action_share_after_", "action "))
+            plt.xlabel("Updates after regime boundary")
+            plt.ylabel("Greedy-action share on fixed probes")
+            plt.legend()
+            plt.tight_layout()
+            plt.savefig(out / f"{label_method}_policy_distribution_after_boundaries.png", dpi=180)
+            plt.close()
+
+    if transitions:
+        deer = trans[trans["replay"] == "deer"].copy()
+        for x, y, name in [("mean_doe", "sample_count", "sampling_count_vs_doe"),
+                           ("mean_td_error", "sample_count", "sampling_count_vs_td_error"),
+                           ("mean_doe", "priority_update_count", "priority_updates_vs_doe")]:
+            valid = deer[np.isfinite(deer[x]) & np.isfinite(deer[y])]
+            if valid.empty:
+                continue
+            plt.figure(figsize=(8, 5))
+            for setting, group in valid.groupby("initial_priority_setting"):
+                plt.scatter(group[x], group[y], s=7, alpha=0.25, label=setting)
+            plt.xlabel(x)
+            plt.ylabel(y)
+            plt.legend()
+            plt.tight_layout()
+            plt.savefig(out / f"{label_method}_{name}.png", dpi=180)
+            plt.close()
+
+        valid_priority = deer[np.isfinite(deer["final_priority"])]
+        if not valid_priority.empty:
+            plt.figure(figsize=(9, 5))
+            valid_priority.boxplot(column="final_priority", by="regime_label", grid=False)
+            plt.suptitle("")
+            plt.title("DEER final priority by regime")
+            plt.ylabel("Final priority")
+            plt.tight_layout()
+            plt.savefig(out / f"{label_method}_priority_by_regime.png", dpi=180)
+            plt.close()
+
+        plt.figure(figsize=(8, 5))
+        grid = np.linspace(0, 100, 201)
+        concentration_curves: dict[str, list[np.ndarray]] = {}
+        for run, group in trans.groupby("run"):
+            counts = np.sort(group["sample_count"].to_numpy(dtype=float))[::-1]
+            if counts.sum() <= 0:
+                continue
+            replay = str(group["replay"].iloc[0])
+            setting = str(group["initial_priority_setting"].iloc[0])
+            method = f"DEER-{setting}" if replay == "deer" else replay.upper()
+            x = np.concatenate([[0.0], np.arange(1, len(counts) + 1) / len(counts) * 100])
+            y = np.concatenate([[0.0], np.cumsum(counts) / counts.sum()])
+            concentration_curves.setdefault(method, []).append(np.interp(grid, x, y))
+        for method, curves in concentration_curves.items():
+            values = np.vstack(curves)
+            mean = values.mean(axis=0)
+            sem = values.std(axis=0, ddof=1) / math.sqrt(len(values)) if len(values) > 1 else np.zeros_like(mean)
+            plt.plot(grid, mean, linewidth=2, label=method)
+            plt.fill_between(grid, mean - sem, mean + sem, alpha=0.12)
+        plt.xlabel("Top transitions (%)")
+        plt.ylabel("Cumulative share of replay")
+        plt.legend(title="Replay method")
+        plt.tight_layout()
+        plt.savefig(out / f"{label_method}_replay_concentration_curve.png", dpi=180)
+        plt.close()
+
+
+def make_plots(output_root: str, label_method: str, replays: list[str], seeds: list[int], deer_initial_priority: str = "max") -> None:
     analysis_dir = Path(output_root) / "analysis"
     analysis_dir.mkdir(parents=True, exist_ok=True)
     mpl_config_dir = analysis_dir / "mplconfig"
@@ -1379,7 +1710,8 @@ def make_plots(output_root: str, label_method: str, replays: list[str], seeds: l
         return
 
     def run_dir(replay: str, seed: int) -> Path:
-        return Path(output_root) / f"{label_method}_{replay}_seed{seed}"
+        suffix = f"_init-{deer_initial_priority}" if replay == "deer" else ""
+        return Path(output_root) / f"{label_method}_{replay}{suffix}_seed{seed}"
 
     plt.figure(figsize=(12, 5))
     for replay in replays:
