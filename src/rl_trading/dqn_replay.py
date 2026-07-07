@@ -1550,10 +1550,14 @@ def analyze_mechanism_outputs(output_root: str, label_method: str) -> None:
         )
     if rows:
         events = pd.concat(rows, ignore_index=True)
-        metric_cols = [c for c in ["q_drift", "action_flip_rate", "q_margin_before", "q_margin_after", "q_margin_change", "td_error", "td_error_shock"] if c in events]
-        metric_cols += [c for c in events if c.startswith("action_share_")]
+        event_columns: list[str] = [c for c in events.columns if isinstance(c, str)]
+        metric_cols = [c for c in ["q_drift", "action_flip_rate", "q_margin_before", "q_margin_after", "q_margin_change", "td_error", "td_error_shock"] if c in event_columns]
+        metric_cols += [c for c in event_columns if c.startswith("action_share_")]
         curves = events.groupby(["replay", "initial_priority_setting", "event_offset"])[metric_cols].agg(["mean", "std", "count"])
-        curves.columns = ["_".join(c) for c in curves.columns]
+        curves.columns = [
+            "_".join(str(part) for part in c) if isinstance(c, tuple) else str(c)
+            for c in curves.columns
+        ]
         curves.reset_index().to_csv(out / f"{label_method}_boundary_aligned_curves.csv", index=False)
         summaries = []
         for keys, group in events.groupby(["run", "boundary_id"]):
@@ -1626,7 +1630,7 @@ def analyze_mechanism_outputs(output_root: str, label_method: str) -> None:
             plt.savefig(out / f"{label_method}_{metric}_around_boundaries.png", dpi=180)
             plt.close()
 
-        action_cols = sorted(c for c in events if c.startswith("action_share_after_"))
+        action_cols = sorted([c for c in event_columns if c.startswith("action_share_after_")])
         if action_cols:
             deer = events[events["replay"] == "deer"]
             plt.figure(figsize=(9, 5))
@@ -1854,7 +1858,8 @@ def make_plots(output_root: str, label_method: str, replays: list[str], seeds: l
                 continue
 
             df = pd.read_csv(path)
-            source_cols = [c for c in df.columns if c.startswith("source_") and c.endswith("_count")]
+            df_columns: list[str] = [c for c in df.columns if isinstance(c, str)]
+            source_cols = [c for c in df_columns if c.startswith("source_") and c.endswith("_count")]
             if not source_cols:
                 continue
 
