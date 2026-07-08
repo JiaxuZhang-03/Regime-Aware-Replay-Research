@@ -211,6 +211,15 @@ The runner also writes a gated selection table:
 outputs/rl_library/analysis/selected_policies.csv
 ```
 
+For ablations, it also writes a naive model-square selection that simply picks
+the highest final portfolio value within each label/seed group, plus a stacked
+comparison table:
+
+```text
+outputs/rl_library/analysis/selected_policies_naive.csv
+outputs/rl_library/analysis/selection_comparison.csv
+```
+
 The performance gate marks policies as failed when they fall below a minimum
 final value, exceed a drawdown cap, or trade too aggressively. This prevents the
 model library from treating unstable RL runs as usable research evidence and

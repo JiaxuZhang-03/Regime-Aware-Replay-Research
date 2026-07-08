@@ -56,19 +56,18 @@ def select_best_policies(summary: pd.DataFrame) -> pd.DataFrame:
     if summary.empty:
         return summary.copy()
     working = summary.copy()
-    if "passes_performance_gate" not in working.columns:
+    if "passes_performance_gate" not in working.columns or "robust_score" not in working.columns:
         working = apply_performance_gate(working)
 
-    group_cols = [c for c in ["label_method", "seed"] if c in working.columns]
-    if not group_cols:
-        group_cols = ["_all"]
-        working["_all"] = "all"
+    group_cols = _selection_group_cols(working)
 
     rows = []
     for _, group in working.groupby(group_cols, dropna=False):
         passing = group[group["passes_performance_gate"].astype(bool)]
         candidates = passing if not passing.empty else group
         best = candidates.sort_values("robust_score", ascending=False).iloc[0].copy()
+        best["selection_mode"] = "gated"
+        best["selection_score_column"] = "robust_score"
         best["selection_pool_size"] = int(len(group))
         best["selection_used_fallback"] = bool(passing.empty)
         rows.append(best)
@@ -77,6 +76,42 @@ def select_best_policies(summary: pd.DataFrame) -> pd.DataFrame:
     if "_all" in selected.columns:
         selected = selected.drop(columns=["_all"])
     return selected.reset_index(drop=True)
+
+
+def select_naive_policies(
+    summary: pd.DataFrame,
+    score_column: str = "final_portfolio_value",
+) -> pd.DataFrame:
+    """Select the top policy per label/seed without applying the performance gate."""
+    if summary.empty:
+        return summary.copy()
+
+    working = summary.copy()
+    group_cols = _selection_group_cols(working)
+    working["_naive_selection_score"] = _numeric(working, score_column)
+
+    rows = []
+    for _, group in working.groupby(group_cols, dropna=False):
+        best = group.sort_values("_naive_selection_score", ascending=False, na_position="last").iloc[0].copy()
+        best["selection_mode"] = "naive"
+        best["selection_score_column"] = score_column
+        best["selection_pool_size"] = int(len(group))
+        best["selection_used_fallback"] = False
+        rows.append(best)
+
+    selected = pd.DataFrame(rows)
+    drop_cols = [c for c in ["_all", "_naive_selection_score"] if c in selected.columns]
+    if drop_cols:
+        selected = selected.drop(columns=drop_cols)
+    return selected.reset_index(drop=True)
+
+
+def _selection_group_cols(df: pd.DataFrame) -> list[str]:
+    group_cols = [c for c in ["label_method", "seed"] if c in df.columns]
+    if group_cols:
+        return group_cols
+    df["_all"] = "all"
+    return ["_all"]
 
 
 def _numeric(df: pd.DataFrame, column: str) -> np.ndarray:

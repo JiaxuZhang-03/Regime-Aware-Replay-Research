@@ -14,7 +14,12 @@ from src.rl_trading.baseline_policies import run_many as run_baseline_many
 from src.rl_trading.dqn_replay import ExperimentConfig as DQNConfig
 from src.rl_trading.dqn_replay import run_many as run_dqn_many
 from src.rl_trading.model_registry import MODEL_REGISTRY, available_models, compatible_replays, validate_models
-from src.rl_trading.performance_gate import PerformanceGateConfig, apply_performance_gate, select_best_policies
+from src.rl_trading.performance_gate import (
+    PerformanceGateConfig,
+    apply_performance_gate,
+    select_best_policies,
+    select_naive_policies,
+)
 from src.rl_trading.sac_replay import SACExperimentConfig
 from src.rl_trading.sac_replay import run_many as run_sac_many
 
@@ -269,15 +274,23 @@ def main() -> None:
             max_turnover=args.gate_max_turnover,
         ),
     )
+    selected_naive = select_naive_policies(combined)
     selected = select_best_policies(combined)
+    selection_comparison = pd.concat([selected_naive, selected], ignore_index=True, sort=False)
     analysis_dir = Path(args.output_root) / "analysis"
     analysis_dir.mkdir(parents=True, exist_ok=True)
     summary_path = analysis_dir / "rl_library_summary.csv"
     selected_path = analysis_dir / "selected_policies.csv"
+    selected_naive_path = analysis_dir / "selected_policies_naive.csv"
+    selection_comparison_path = analysis_dir / "selection_comparison.csv"
     combined.to_csv(summary_path, index=False)
     selected.to_csv(selected_path, index=False)
+    selected_naive.to_csv(selected_naive_path, index=False)
+    selection_comparison.to_csv(selection_comparison_path, index=False)
     print(f"\n[rl-library] wrote {summary_path}")
     print(f"[rl-library] wrote {selected_path}")
+    print(f"[rl-library] wrote {selected_naive_path}")
+    print(f"[rl-library] wrote {selection_comparison_path}")
     print(combined.to_string(index=False))
 
 
