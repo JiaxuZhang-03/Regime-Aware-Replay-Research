@@ -40,6 +40,8 @@ class SACExperimentConfig:
     label_method: str = "rule_based"
     tradable_symbols: tuple[str, ...] = ("DIA", "SPY", "QQQ")
     primary_symbol: str = "SPY"
+    start_date: str = ""
+    end_date: str = ""
 
     transaction_cost_bps: float = 10.0
     action_temperature: float = 1.0
@@ -193,6 +195,16 @@ class MarketSACEnv:
 
         df = features.merge(labels, on="date", how="inner").merge(returns, on="date", how="inner")
         df = df.sort_values("date").reset_index(drop=True)
+        if cfg.start_date:
+            df = df[df["date"] >= pd.Timestamp(cfg.start_date)].copy()
+        if cfg.end_date:
+            df = df[df["date"] <= pd.Timestamp(cfg.end_date)].copy()
+        df = df.reset_index(drop=True)
+        if len(df) < 3:
+            raise ValueError(
+                f"Need at least 3 rows after date filtering, got {len(df)} "
+                f"for start_date={cfg.start_date!r}, end_date={cfg.end_date!r}."
+            )
 
         self.symbols = []
         for s in cfg.tradable_symbols:
